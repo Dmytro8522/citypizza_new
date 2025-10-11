@@ -30,21 +30,21 @@ class CartItem {
     final dynamic rawExtras = json['extras'];
     Map<int, int> parsedExtras;
     if (rawExtras is String) {
-      if (rawExtras.isEmpty) {
-        parsedExtras = <int, int>{};
-      } else {
-        final decoded = jsonDecode(rawExtras);
-        if (decoded is Map) {
-          parsedExtras = (decoded as Map).map(
-            (key, value) => MapEntry(int.parse(key.toString()), value as int),
-          );
-        } else {
+        if (rawExtras.isEmpty) {
           parsedExtras = <int, int>{};
+        } else {
+          final decoded = jsonDecode(rawExtras);
+          if (decoded is Map) {
+            parsedExtras = Map<int, int>.fromEntries(
+              decoded.entries.map((e) => MapEntry(int.parse(e.key.toString()), e.value as int)),
+            );
+          } else {
+            parsedExtras = <int, int>{};
+          }
         }
-      }
     } else if (rawExtras is Map) {
-      parsedExtras = (rawExtras as Map).map(
-        (key, value) => MapEntry(int.parse(key.toString()), value as int),
+      parsedExtras = Map<int, int>.fromEntries(
+        rawExtras.entries.map((e) => MapEntry(int.parse(e.key.toString()), e.value as int)),
       );
     } else {
       parsedExtras = <int, int>{};
@@ -98,6 +98,43 @@ class CartService {
         ..addAll(
           list.map((e) => CartItem.fromJson(e as Map<String, dynamic>)).toList(),
         );
+
+      // Миграция: нормализуем старые записи, где size == 'Standard' или sizeId == null
+      for (var i = 0; i < _items.length; i++) {
+        final it = _items[i];
+        bool changed = false;
+        String newSize = it.size;
+        int? newSizeId = it.sizeId;
+
+        if (it.size.toLowerCase() == 'standard') {
+          newSize = 'Normal';
+          newSizeId = newSizeId ?? 2;
+          changed = true;
+        }
+
+        // Если sizeId отсутствует, но позиция имеет basePrice equal to single_size_price? Мы не знаем.
+        // Безопасно: если sizeId == null и название размера пустое или неизвестное, выставим Normal/2
+        if (newSizeId == null && (newSize.isEmpty || newSize.toLowerCase() == 'standard')) {
+          newSize = 'Normal';
+          newSizeId = 2;
+          changed = true;
+        }
+
+        if (changed) {
+          _items[i] = CartItem(
+            itemId: it.itemId,
+            name: it.name,
+            size: newSize,
+            basePrice: it.basePrice,
+            extras: it.extras,
+            article: it.article,
+            sizeId: newSizeId,
+          );
+        }
+      }
+
+      // Сохраняем нормализованные данные обратно
+      await _save();
       cartCountNotifier.value = _items.length;
     }
   }

@@ -5,7 +5,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../theme/theme_provider.dart';
-import '../widgets/common_app_bar.dart';
 import '../widgets/no_internet_widget.dart'; // добавлено
 import 'home_screen.dart'; // здесь модель MenuItem
 import 'menu_item_detail_screen.dart';
@@ -89,7 +88,7 @@ class _MenuScreenState extends State<MenuScreen> {
                 .select('price')
                 .eq('menu_item_id', itemId);
 
-            if (pricesRaw is List && pricesRaw.isNotEmpty) {
+            if (pricesRaw.isNotEmpty) {
               final sorted = pricesRaw
                   .map((p) => (p['price'] as num?)?.toDouble() ?? 0.0)
                   .toList()
@@ -198,8 +197,7 @@ class _MenuScreenState extends State<MenuScreen> {
                                   .select()
                                   .eq('id', item.id)
                                   .single();
-                              final menuItem = MenuItem.fromMap(
-                                  data as Map<String, dynamic>);
+                          final menuItem = MenuItem.fromMap(data);
                               await Navigator.push(
                                 context,
                                 MaterialPageRoute(
@@ -245,88 +243,91 @@ class _MenuListItem extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Фото
-              Container(
-                width: 90,
-                height: 90,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  color: appTheme.backgroundColor.withOpacity(0.7),
+              if (item.imageUrl != null && item.imageUrl!.isNotEmpty) ...[
+                Container(
+                  width: 90,
+                  height: 90,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: appTheme.backgroundColor.withOpacity(0.7),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Hero(
+                    tag: 'menuItemImage_${item.id}',
+                    child: Image.network(
+                      item.imageUrl!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Icon(
+                        Icons.image_not_supported,
+                        color: appTheme.textColorSecondary,
+                        size: 44,
+                      ),
+                    ),
+                  ),
                 ),
-                clipBehavior: Clip.antiAlias,
-                child: item.imageUrl != null && item.imageUrl!.isNotEmpty
-                    ? Hero(
-                        tag: 'menuItemImage_${item.id}',
-                        child: Image.network(
-                          item.imageUrl!,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Icon(
-                            Icons.image_not_supported,
-                            color: appTheme.textColorSecondary,
-                            size: 44,
-                          ),
-                        ),
-                      )
-                    : Icon(Icons.fastfood,
-                        color: appTheme.textColorSecondary, size: 44),
-              ),
-              const SizedBox(width: 16),
+                const SizedBox(width: 16),
+              ],
               // Инфо
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if (item.article != null && item.article!.isNotEmpty)
+                child: Padding(
+                  padding: item.imageUrl != null && item.imageUrl!.isNotEmpty
+                      ? EdgeInsets.zero
+                      : const EdgeInsets.only(left: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (item.article != null && item.article!.isNotEmpty)
+                        Text(
+                          'Art.Nr. ${item.article}',
+                          style: GoogleFonts.poppins(
+                            color: appTheme.primaryColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
                       Text(
-                        'Art.Nr. ${item.article}',
+                        item.name,
+                        style: GoogleFonts.poppins(
+                          color: appTheme.textColor,
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (item.description != null &&
+                          item.description!.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 3.0),
+                          child: Text(
+                            item.description!,
+                            style: GoogleFonts.poppins(
+                              color: appTheme.textColorSecondary,
+                              fontSize: 13,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      const Spacer(),
+                      // Цена
+                      Text(
+                        item.hasMultipleSizes
+                            ? (item.minPrice > 0
+                                ? 'ab ${item.minPrice.toStringAsFixed(2)} €'
+                                : '')
+                            : (item.singleSizePrice != null
+                                ? '${item.singleSizePrice!.toStringAsFixed(2)} €'
+                                : ''),
                         style: GoogleFonts.poppins(
                           color: appTheme.primaryColor,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                    Text(
-                      item.name,
-                      style: GoogleFonts.poppins(
-                        color: appTheme.textColor,
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (item.description != null &&
-                        item.description!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3.0),
-                        child: Text(
-                          item.description!,
-                          style: GoogleFonts.poppins(
-                            color: appTheme.textColorSecondary,
-                            fontSize: 13,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    const Spacer(),
-                    // Цена
-                    Text(
-                      item.hasMultipleSizes
-                          ? (item.minPrice > 0
-                              ? 'ab ${item.minPrice.toStringAsFixed(2)} €'
-                              : '')
-                          : (item.singleSizePrice != null
-                              ? '${item.singleSizePrice!.toStringAsFixed(2)} €'
-                              : ''),
-                      style: GoogleFonts.poppins(
-                        color: appTheme.primaryColor,
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
               GestureDetector(

@@ -11,6 +11,7 @@ import '../services/cart_service.dart';  // CartItem & CartService
 import 'cart_screen.dart';               // CartScreen for navigation
 import '../widgets/no_internet_widget.dart';
 import '../theme/theme_provider.dart';
+import '../widgets/menu_item_placeholder.dart';
 
 class ExtraOption {
   final int id;
@@ -415,14 +416,34 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen> {
           physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.all(16),
           children: [
-            if (item.imageUrl != null) ...[
+            if (item.imageUrl != null && item.imageUrl!.isNotEmpty) ...[
               Hero(
                 tag: 'menuItemImage_${item.id}',
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(16),
-                  child: Image.network(item.imageUrl!,
-                      height: 240, fit: BoxFit.cover),
+                  child: Image.network(
+                    item.imageUrl!,
+                    height: 240,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => SizedBox(
+                      height: 240,
+                      child: MenuItemPlaceholder(
+                        title: item.name,
+                        price: item.singleSizePrice != null ? '${item.singleSizePrice!.toStringAsFixed(2)} €' : null,
+                        borderRadius: 16,
+                      ),
+                    ),
+                  ),
                 ),
+              ),
+              const SizedBox(height: 16),
+            ] else ...[
+              // no image: show placeholder
+              MenuItemPlaceholder(
+                height: 240,
+                title: item.name,
+                price: item.singleSizePrice != null ? '${item.singleSizePrice!.toStringAsFixed(2)} €' : null,
+                borderRadius: 16,
               ),
               const SizedBox(height: 16),
             ],

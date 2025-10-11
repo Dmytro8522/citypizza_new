@@ -1,7 +1,6 @@
 // lib/screens/top_items_carousel.dart
 
 import 'dart:io';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -10,6 +9,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../services/cart_service.dart';   // CartService & CartItem
 import 'home_screen.dart';               // MenuItem, AnimatedGradientSection
 import '../widgets/no_internet_widget.dart';
+// removed unused imports
 
 /// Маленькая анимированная иконка огонька
 class AnimatedFireIcon extends StatefulWidget {
@@ -305,16 +305,9 @@ class _TopItemsCarouselState extends State<TopItemsCarousel> {
                         ),
                       ),
                       GestureDetector(
-                        onTap: () {
-                          CartService.addItem(CartItem(
-                            itemId: item.id,
-                            name: item.name,
-                            size: item.hasMultipleSizes ? 'Standard' : 'Normal',
-                            basePrice: item.minPrice,
-                            extras: {},
-                            article: item.article,
-                            sizeId: item.hasMultipleSizes ? null : 2,
-                          ));
+                        onTap: () async {
+                          // Используем addItemById чтобы централизованно определить size/sizeId и цену
+                          await CartService.addItemById(item.id);
                         },
                         child: Container(
                           width: 32,
