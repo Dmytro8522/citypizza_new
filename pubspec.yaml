@@ -1,0 +1,53 @@
+name: citypizza_app
+description: "A new Flutter project."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.16.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  firebase_core: ^2.24.2  
+  firebase_messaging: ^14.7.8
+  lottie: ^2.4.0
+  shared_preferences: ^2.2.2
+  intl: ^0.18.1
+  app_links: ^3.4.3
+  flutter_colorpicker: ^1.0.3
+  supabase_flutter: ^2.3.4
+  geolocator: ^10.1.1
+  geocoding: ^2.1.1
+  cupertino_icons: ^1.0.8
+  video_player: ^2.8.3
+  google_fonts: ^4.0.3
+  url_launcher: ^6.2.5
+  translator: ^0.1.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+  flutter_launcher_icons: ^0.13.1
+
+flutter_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  adaptive_icon_background: "#F07523"
+  remove_alpha_ios: true
+  android_label: "City Pizza"
+  ios_name: "City Pizza"
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/logo.png
+    - assets/onboarding.mp4
+    - assets/pizza_slice.png
+    - assets/cookie_illustration.png
+    - assets/icon/app_icon.png
+    - assets/fire.json

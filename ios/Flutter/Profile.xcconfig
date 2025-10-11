@@ -1,0 +1,5 @@
+# Include the Pods-Runner profile settings so CocoaPods integrates correctly for the Profile configuration
+#include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.profile.xcconfig"
+
+# Keep Flutter generated settings last to allow overrides from Pods config when needed
+#include "Generated.xcconfig"
