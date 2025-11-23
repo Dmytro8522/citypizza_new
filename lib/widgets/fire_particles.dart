@@ -7,8 +7,7 @@ const int _particleCount = 120;
 class FireParticles extends StatefulWidget {
   final double width;
   final double height;
-  const FireParticles({Key? key, required this.width, required this.height})
-      : super(key: key);
+  const FireParticles({super.key, required this.width, required this.height});
 
   @override
   State<FireParticles> createState() => _FireParticlesState();
@@ -32,7 +31,9 @@ class _FireParticlesState extends State<FireParticles>
       duration: const Duration(milliseconds: 800),
     )
       ..addListener(() {
-        for (final p in _particles) p.update();
+        for (final p in _particles) {
+          p.update();
+        }
         setState(() {});
       })
       ..repeat();

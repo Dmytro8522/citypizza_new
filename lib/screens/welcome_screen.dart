@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-import '../widgets/animated_logo.dart';
 import '../services/consent_service.dart';
 import '../constants/legal_texts.dart';
 import 'cookie_settings_screen.dart';

@@ -6,11 +6,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/auth_service.dart';
 import '../utils/globals.dart';
-import 'profile_screen_auth.dart';
-import 'home_screen.dart';
 
 class EmailLoginScreen extends StatefulWidget {
-  const EmailLoginScreen({Key? key}) : super(key: key);
+  const EmailLoginScreen({super.key});
 
   @override
   State<EmailLoginScreen> createState() => _EmailLoginScreenState();
@@ -47,8 +45,8 @@ class _EmailLoginScreenState extends State<EmailLoginScreen> {
   }
 
   void _showResetPasswordDialog() {
-    final _resetEmailController = TextEditingController();
-    bool _dialogLoading = false;
+    final resetEmailController = TextEditingController();
+    bool dialogLoading = false;
 
     showDialog(
       context: context,
@@ -77,7 +75,7 @@ class _EmailLoginScreenState extends State<EmailLoginScreen> {
                   ),
                   const SizedBox(height: 16),
                   TextField(
-                    controller: _resetEmailController,
+                    controller: resetEmailController,
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       labelText: 'E-Mail',
@@ -108,10 +106,10 @@ class _EmailLoginScreenState extends State<EmailLoginScreen> {
                     backgroundColor: Colors.orange,
                     foregroundColor: Colors.black,
                   ),
-                  onPressed: _dialogLoading
+                  onPressed: dialogLoading
                       ? null
                       : () async {
-                          final email = _resetEmailController.text.trim();
+                          final email = resetEmailController.text.trim();
                           if (email.isEmpty ||
                               !RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email)) {
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -122,7 +120,7 @@ class _EmailLoginScreenState extends State<EmailLoginScreen> {
                             );
                             return;
                           }
-                          setState(() => _dialogLoading = true);
+                          setState(() => dialogLoading = true);
                           try {
                             await Supabase.instance.client.auth
                                 .resetPasswordForEmail(
@@ -139,13 +137,13 @@ class _EmailLoginScreenState extends State<EmailLoginScreen> {
                               ),
                             );
                           } catch (e) {
-                            setState(() => _dialogLoading = false);
+                            setState(() => dialogLoading = false);
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(content: Text('Fehler: $e')),
                             );
                           }
                         },
-                  child: _dialogLoading
+                  child: dialogLoading
                       ? const SizedBox(
                           width: 18,
                           height: 18,

@@ -3,10 +3,10 @@ import 'app_theme.dart';
 
 class ThemeProvider extends InheritedNotifier<AppTheme> {
   const ThemeProvider({
-    Key? key,
-    required AppTheme notifier,
-    required Widget child,
-  }) : super(key: key, notifier: notifier, child: child);
+    super.key,
+    required AppTheme super.notifier,
+    required super.child,
+  });
 
   static AppTheme of(BuildContext context) {
     final ThemeProvider? provider = context.dependOnInheritedWidgetOfExactType<ThemeProvider>();

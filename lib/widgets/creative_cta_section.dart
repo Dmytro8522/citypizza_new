@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 class CreativeCtaSection extends StatefulWidget {
   final VoidCallback onTap;
-  const CreativeCtaSection({Key? key, required this.onTap}) : super(key: key);
+  const CreativeCtaSection({super.key, required this.onTap});
 
   @override
   _CreativeCtaSectionState createState() => _CreativeCtaSectionState();
@@ -103,9 +103,9 @@ class _CreativeCtaSectionState extends State<CreativeCtaSection>
             bottom: -2,
             child: Container(
               height: 4,
-              decoration: BoxDecoration(
-                color: const Color(0xFFFF5722),
-                borderRadius: const BorderRadius.vertical(
+              decoration: const BoxDecoration(
+                color: Color(0xFFFF5722),
+                borderRadius: BorderRadius.vertical(
                   bottom: Radius.circular(18),
                 ),
               ),

@@ -10,27 +10,45 @@ class UpSellWidget extends StatefulWidget {
   final double subtotal;
   final VoidCallback? onItemAdded;
   final void Function(int itemId)? onItemTap;
+  final bool autoCloseOnAdd;
+  final List<Map<String, dynamic>>? initialItems; // если переданы, не грузим повторно
+  final int? itemId; // текущая позиция для экрана деталей
+  final Future<void> Function(Rect startRect)? onAnimateToCart;
 
   const UpSellWidget({
-    Key? key,
+    super.key,
     required this.channel,
     required this.subtotal,
     this.onItemAdded,
     this.onItemTap,
-  }) : super(key: key);
+    this.autoCloseOnAdd = false,
+    this.initialItems,
+    this.itemId,
+    this.onAnimateToCart,
+  });
 
   @override
-  _UpSellWidgetState createState() => _UpSellWidgetState();
+  State<UpSellWidget> createState() => _UpSellWidgetState();
 }
 
 class _UpSellWidgetState extends State<UpSellWidget> {
   bool _loading = true;
   List<Map<String, dynamic>> _items = [];
+  List<Map<String, dynamic>> _grouped = [];
+  bool _isGrouped = false;
+  final Map<String, GlobalKey> _buttonKeys = {};
+  final Set<String> _animating = <String>{};
+  final Set<int> _expandedGroups = <int>{};
 
   @override
   void initState() {
     super.initState();
-    _loadUpsell();
+    if (widget.initialItems != null) {
+      _updateData(widget.initialItems!);
+      _loading = false;
+    } else {
+      _loadUpsell();
+    }
   }
 
   Future<void> _loadUpsell() async {
@@ -38,138 +56,304 @@ class _UpSellWidgetState extends State<UpSellWidget> {
       channel: widget.channel,
       subtotal: widget.subtotal,
       userId: null,
+      itemId: widget.itemId,
     );
     if (!mounted) return;
     setState(() {
-      _items = data;
+      _updateData(data);
       _loading = false;
     });
   }
 
+  void _updateData(List<Map<String, dynamic>> data) {
+    final looksGrouped = data.isNotEmpty && data.first.containsKey('items');
+    if (widget.itemId != null || looksGrouped) {
+      _isGrouped = true;
+      _grouped = data;
+      _items = const <Map<String, dynamic>>[];
+      _expandedGroups.clear();
+    } else {
+      _isGrouped = false;
+      _items = data;
+      _grouped = const <Map<String, dynamic>>[];
+      _expandedGroups.clear();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (_loading || _items.isEmpty) return const SizedBox.shrink();
+    if (_loading) {
+      return const SizedBox(
+        height: 120,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_isGrouped && _grouped.isEmpty) {
+      return SizedBox(
+        height: 100,
+        child: Center(
+          child: Text(
+            'Keine Angebote',
+            style: GoogleFonts.poppins(color: Colors.black54),
+          ),
+        ),
+      );
+    }
+
+    if (!_isGrouped && _items.isEmpty) {
+      return SizedBox(
+        height: 100,
+        child: Center(
+          child: Text(
+            'Keine Angebote',
+            style: GoogleFonts.poppins(color: Colors.black54),
+          ),
+        ),
+      );
+    }
 
     return Container(
-      color: Colors.grey[850],
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+  border: Border.all(color: Colors.black.withValues(alpha: 0.12)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 12, offset: const Offset(0, 6)),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Заголовок
-          Text(
-            'Das könnte Ihnen gefallen',
-            style: GoogleFonts.poppins(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              'Das könnte Ihnen gefallen',
+              style: GoogleFonts.poppins(
+                color: Colors.black87,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
-          const SizedBox(height: 8),
-          // Горизонтальный ряд, динамическая высота через IntrinsicHeight
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: _items.map((it) {
-                return Expanded(
-                  child: _buildTile(it),
-                );
-              }).toList(),
+          const SizedBox(height: 10),
+          if (_isGrouped)
+            Column(
+              children: [
+                for (int i = 0; i < _grouped.length; i++)
+                  _buildGroupSection(_grouped[i], isLast: i == _grouped.length - 1),
+              ],
+            )
+          else
+            Column(
+              children: [
+                for (final it in _items.length > 8 ? _items.take(8) : _items) _buildRow(it),
+              ],
             ),
-          ),
         ],
       ),
     );
   }
 
-  Widget _buildTile(Map<String, dynamic> it) {
-    return GestureDetector(
-      onTap: () => widget.onItemTap?.call(it['id'] as int),
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        decoration: BoxDecoration(
-          color: Colors.grey[800],
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          children: [
-            // 1) Изображение
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-              child: it['image_url'] != null
-                  ? Image.network(
-                      it['image_url'] as String,
-                      height: 80,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                    )
-                  : Container(
-                      height: 80,
-                      color: Colors.white10,
-                    ),
-            ),
-            const SizedBox(height: 6),
-            // 2) Название
+  Widget _buildGroupSection(Map<String, dynamic> group, {required bool isLast}) {
+    final groupName = (group['group_name'] as String?)?.trim();
+    final rawItems = (group['items'] as List?) ?? const [];
+    final items = rawItems.cast<Map<String, dynamic>>();
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    final gid = (group['group_id'] as int?) ?? 0;
+    final isExpanded = _expandedGroups.contains(gid);
+    final visibleItems = isExpanded ? items : items.take(3).toList();
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (groupName != null && groupName.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               child: Text(
-                '${it['article'] != null ? '[${it['article']}] ' : ''}${it['name']}',
+                groupName,
                 style: GoogleFonts.poppins(
-                  color: Colors.white,
-                  fontSize: 12,
+                  color: Colors.black87,
+                  fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
               ),
             ),
-            const SizedBox(height: 6),
-            // 3) Цена
-            Text(
-              '${(it['price'] as double).toStringAsFixed(2)} €',
-              style: GoogleFonts.poppins(
-                color: Colors.orangeAccent,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const Spacer(), // подтягивает кнопку вниз
-            // 4) Кнопка
+          Column(
+            children: [
+              for (final it in visibleItems) _buildRow(it, groupId: gid),
+            ],
+          ),
+          if (items.length > 3)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-              child: SizedBox(
-                width: double.infinity,
-                height: 32,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    padding: EdgeInsets.zero,
-                  ),
-                  onPressed: () async {
-                    // Вместо ручного создания CartItem, используем addItemById,
-                    // чтобы CartService сам выбрал минимальный размер/цену.
-                    await CartService.addItemById(it['id'] as int);
-                    widget.onItemAdded?.call();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Hinzugefügt: ${it['name']}')),
-                    );
+              padding: const EdgeInsets.only(left: 4, top: 6, right: 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: () {
+                    setState(() {
+                      if (isExpanded) {
+                        _expandedGroups.remove(gid);
+                      } else {
+                        _expandedGroups.add(gid);
+                      }
+                    });
                   },
+                  style: TextButton.styleFrom(padding: EdgeInsets.zero),
                   child: Text(
-                    'Hinzufügen',
-                    style: GoogleFonts.poppins(
-                      color: Colors.black,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    isExpanded ? 'Weniger anzeigen' : 'Mehr anzeigen',
+                    style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
                   ),
                 ),
               ),
             ),
-          ],
+          if (!isLast)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+              child: Divider(
+                color: Colors.black.withValues(alpha: 0.1),
+                height: 1,
+                thickness: 1,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRow(Map<String, dynamic> it, {int? groupId}) {
+    final price = ((it['price'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2);
+  final title = '${it['article'] != null ? '[${it['article']}] ' : ''}${it['name'] ?? ''}';
+    final int itemId = (it['id'] as int?) ?? 0;
+    final identity = groupId != null ? 'g${groupId}_$itemId' : 's_$itemId';
+    final buttonKey = _buttonKeys.putIfAbsent(identity, () => GlobalKey());
+    final isAnimating = _animating.contains(identity);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => widget.onItemTap?.call(((it['id'] as int?) ?? 0)),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          decoration: const BoxDecoration(),
+          child: Row(
+            children: [
+              // Название слева
+              Expanded(
+                child: Text(
+                  title,
+                  style: GoogleFonts.poppins(
+                    color: Colors.black87,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  softWrap: true,
+                  maxLines: 3,
+                  overflow: TextOverflow.visible,
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Цена по правому краю
+              Text(
+                '€$price',
+                style: GoogleFonts.poppins(
+                  color: Colors.black87,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Кнопка добавления
+              InkWell(
+                key: buttonKey,
+                onTap: () async {
+                  final contextForButton = buttonKey.currentContext;
+                  if (contextForButton != null) {
+                    final renderBox = contextForButton.findRenderObject() as RenderBox?;
+                    if (renderBox != null) {
+                      final offset = renderBox.localToGlobal(Offset.zero);
+                      final rect = offset & renderBox.size;
+                      if (mounted) {
+                        setState(() => _animating.add(identity));
+                      } else {
+                        _animating.add(identity);
+                      }
+                      try {
+                        final addFuture = CartService.addItemById(itemId);
+                        final animationFuture = widget.onAnimateToCart?.call(rect);
+                        await addFuture;
+                        if (!mounted) return;
+                        if (animationFuture != null) {
+                          await animationFuture;
+                          if (!mounted) return;
+                        }
+                        if (widget.autoCloseOnAdd) {
+                          final rootNavigator = Navigator.of(context, rootNavigator: true);
+                          if (rootNavigator.canPop()) {
+                            rootNavigator.maybePop();
+                          } else if (Navigator.of(context).canPop()) {
+                            Navigator.of(context).maybePop();
+                          }
+                        }
+                        widget.onItemAdded?.call();
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Hinzugefügt: ${it['name']}')),
+                        );
+                      } finally {
+                        if (mounted) {
+                          setState(() => _animating.remove(identity));
+                        } else {
+                          _animating.remove(identity);
+                        }
+                      }
+                      return;
+                    }
+                  }
+                  await CartService.addItemById(itemId);
+                  if (!mounted) return;
+                  if (widget.autoCloseOnAdd) {
+                    final rootNavigator = Navigator.of(context, rootNavigator: true);
+                    if (rootNavigator.canPop()) {
+                      rootNavigator.maybePop();
+                    } else if (Navigator.of(context).canPop()) {
+                      Navigator.of(context).maybePop();
+                    }
+                  }
+                  widget.onItemAdded?.call();
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Hinzugefügt: ${it['name']}')),
+                  );
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: isAnimating ? Colors.greenAccent : Colors.orange,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    transitionBuilder: (child, anim) => ScaleTransition(scale: anim, child: child),
+                    child: Icon(
+                      isAnimating ? Icons.shopping_bag : Icons.add,
+                      key: ValueKey<bool>(isAnimating),
+                      size: 20,
+                      color: Colors.black,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -1,7 +1,6 @@
 // lib/widgets/bottom_nav.dart
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 typedef OnTab = void Function(int index);
 
@@ -15,13 +14,13 @@ class BottomNav extends StatelessWidget {
   final Color? unselectedColor;
 
   const BottomNav({
-    Key? key,
+    super.key,
     required this.currentIndex,
     required this.onTap,
     this.backgroundColor,
     this.selectedColor,
     this.unselectedColor,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

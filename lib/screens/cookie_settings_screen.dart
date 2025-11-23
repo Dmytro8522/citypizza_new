@@ -9,7 +9,7 @@ import '../services/consent_service.dart';
 import '../widgets/main_scaffold.dart';
 
 class CookieSettingsScreen extends StatefulWidget {
-  const CookieSettingsScreen({Key? key}) : super(key: key);
+  const CookieSettingsScreen({super.key});
 
   @override
   State<CookieSettingsScreen> createState() => _CookieSettingsScreenState();
@@ -102,7 +102,7 @@ class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: IconButton(
-                  icon: Icon(Icons.close, color: Colors.white, size: 28),
+                  icon: const Icon(Icons.close, color: Colors.white, size: 28),
                   onPressed: () => SystemNavigator.pop(),
                 ),
               ),
@@ -165,7 +165,7 @@ class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
                 inactiveTrackColor: Colors.white24,
                 contentPadding: EdgeInsets.zero,
               ),
-              Spacer(),
+              const Spacer(),
               Center(
                 child: Text.rich(
                   TextSpan(
@@ -175,14 +175,14 @@ class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
                     children: [
                       TextSpan(
                         text: 'Cookie-Richtlinie',
-                        style: TextStyle(
+                        style: const TextStyle(
                           color: Colors.orange,
                           decoration: TextDecoration.underline,
                         ),
                         recognizer: TapGestureRecognizer()
                           ..onTap = _showCookiePolicy,
                       ),
-                      TextSpan(text: '.'),
+                      const TextSpan(text: '.'),
                     ],
                   ),
                   textAlign: TextAlign.center,
@@ -208,7 +208,7 @@ class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
               OutlinedButton(
                 onPressed: () => _saveAndContinue(acceptAll: false),
                 style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: Colors.white54),
+                  side: const BorderSide(color: Colors.white54),
                   minimumSize: Size(double.infinity, vh(50)),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(30),

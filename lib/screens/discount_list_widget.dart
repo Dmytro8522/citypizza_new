@@ -1,10 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../widgets/fire_background_section.dart';
 import '../widgets/fire_particles.dart';
+import '../services/discount_service.dart';
 
 const double _cardWidth = 260;
 const double _cardHeight = 180;
@@ -13,19 +14,19 @@ const Duration _pageAnimationDuration = Duration(milliseconds: 800);
 
 /// Обёртка для секции со скидками
 class DiscountSection extends StatelessWidget {
-  const DiscountSection({Key? key}) : super(key: key);
+  const DiscountSection({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return FireBackgroundSection(
-      title: const SizedBox.shrink(),
-      child: const DiscountListWidget(),
+    return const FireBackgroundSection(
+      title: SizedBox.shrink(),
+      child: DiscountListWidget(),
     );
   }
 }
 
 class DiscountListWidget extends StatefulWidget {
-  const DiscountListWidget({Key? key}) : super(key: key);
+  const DiscountListWidget({super.key});
 
   @override
   State<DiscountListWidget> createState() => _DiscountListWidgetState();
@@ -35,7 +36,7 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
     with TickerProviderStateMixin {  // <-- 변경 здесь
   final PageController _pageCtrl = PageController(viewportFraction: 0.9);
   Timer? _autoScrollTimer;
-  List<Map<String, dynamic>> _discounts = [];
+  List<Promotion> _promotions = [];
   bool _loading = true;
 
   // пульс-эффект для рамки
@@ -70,37 +71,38 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
           Timer.periodic(_autoScrollInterval, (_) => _nextPage());
     });
 
-    _fetchDiscounts();
+    _fetchPromotions();
   }
 
-  Future<void> _fetchDiscounts() async {
+  Future<void> _fetchPromotions() async {
     setState(() => _loading = true);
-    final now = DateTime.now().toIso8601String();
-    final res = await Supabase.instance.client
-        .from('discounts')
-        .select()
-        .eq('active', true)
-        .lte('start_at', now)
-        .order('start_at', ascending: false);
+    try {
+      final promos = await fetchActivePromotions(at: DateTime.now());
 
-    final filt = (res as List)
-        .cast<Map<String, dynamic>>()
-        .where((d) =>
-            d['end_at'] == null ||
-            DateTime.parse(d['end_at']).isAfter(DateTime.now()))
-        .toList();
-
-    if (!mounted) return;
-    setState(() {
-      _discounts = filt;
-      _loading = false;
-    });
+      if (!mounted) return;
+      setState(() {
+        _promotions = promos;
+        _loading = false;
+      });
+    } on SocketException {
+      if (!mounted) return;
+      setState(() {
+        _promotions = [];
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _promotions = [];
+        _loading = false;
+      });
+    }
   }
 
   void _nextPage() {
-    if (_discounts.isEmpty || !_pageCtrl.hasClients) return;
+    if (_promotions.isEmpty || !_pageCtrl.hasClients) return;
     final current = (_pageCtrl.page ?? 0).round();
-    final next = current + 1 >= _discounts.length ? 0 : current + 1;
+    final next = current + 1 >= _promotions.length ? 0 : current + 1;
     _pageCtrl.animateToPage(
       next,
       duration: _pageAnimationDuration,
@@ -125,50 +127,80 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
         '${dt.year}';
   }
 
+  String _normalizedType(Promotion promo) => promo.discountType
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'\s+'), '_')
+      .replaceAll('-', '_');
+
+  bool _isFixedPrice(Promotion promo) {
+    final type = _normalizedType(promo);
+    return type.startsWith('fixed_price');
+  }
+
+  bool _isDiscountReduction(Promotion promo) {
+    return !_isFixedPrice(promo);
+  }
+
+  String _formattedValue(Promotion promo) {
+    final magnitude = promo.discountValue.abs();
+    final decimals = magnitude.truncateToDouble() == magnitude ? 0 : 2;
+    final formatted = magnitude.toStringAsFixed(decimals);
+    final type = _normalizedType(promo);
+    if (type.contains('percent')) {
+      return '$formatted%';
+    }
+    return '€$formatted';
+  }
+
+  String _headlineValue(Promotion promo) {
+    final base = _formattedValue(promo);
+    return _isDiscountReduction(promo) ? '-$base' : base;
+  }
+
+  String _badgeLabel(Promotion promo) {
+    final base = _formattedValue(promo);
+    return _isDiscountReduction(promo) ? 'Rabatt: -$base' : 'Aktionspreis: $base';
+  }
+
+  String _detailValue(Promotion promo) {
+    final base = _formattedValue(promo);
+    return _isDiscountReduction(promo) ? '-$base' : base;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return SizedBox(
+      return const SizedBox(
         height: _cardHeight,
-        child: const Center(
+        child: Center(
           child: CircularProgressIndicator(color: Colors.white),
         ),
       );
     }
-    if (_discounts.isEmpty) {
-      return SizedBox(
-        height: _cardHeight,
-        child: const Center(
-          child: Text(
-            'Zurzeit keine Angebote',
-            style: TextStyle(color: Colors.white70),
-          ),
-        ),
-      );
+    if (_promotions.isEmpty) {
+      return const SizedBox.shrink();
     }
 
     return SizedBox(
       height: _cardHeight,
       child: PageView.builder(
         controller: _pageCtrl,
-        itemCount: _discounts.length,
+    itemCount: _promotions.length,
         padEnds: false,
         itemBuilder: (context, idx) {
-          final d = _discounts[idx];
-          final isPercent = d['discount_type'] == 'percent';
-          // Исправлено: отображаем только целые числа
-          final value = d['value'];
-          final valueStr = isPercent
-              ? '${(value is num ? value.toInt() : int.tryParse(value.toString()) ?? value)}%'
-              : '€${(value is num ? value.toInt() : int.tryParse(value.toString()) ?? value)}';
-          final title = d['name'] ?? 'Angebot';
-          final desc = (d['description'] ?? '').toString().trim();
-          final period = (d['start_at'] != null ? _formatDate(d['start_at']) : '') +
-              (d['end_at'] != null ? ' – ${_formatDate(d['end_at'])}' : '');
+          final promo = _promotions[idx];
+          final headlineValue = _headlineValue(promo);
+          final title = promo.name.isNotEmpty ? promo.name : 'Angebot';
+          final desc = (promo.description ?? '').toString().trim();
+          final period = _formatDate(promo.startsAt.toIso8601String()) +
+              (promo.endsAt != null
+                  ? ' – ${_formatDate(promo.endsAt!.toIso8601String())}'
+                  : '');
           final glow = 0.6 + 0.4 * _pulseCtrl.value;
 
           return GestureDetector(
-            onTap: () => _showDetail(context, d),
+            onTap: () => _showDetail(context, promo),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Transform.scale(
@@ -193,7 +225,7 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
                           child: Container(color: Colors.transparent),
                         ),
                       ),
-                      Positioned(
+                      const Positioned(
                         top: -20,
                         left: -20,
                         child: SizedBox(
@@ -211,6 +243,7 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Expanded(
                                   child: Text(
@@ -219,8 +252,6 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
                                       color: Colors.white,
                                       fontSize: 18,
                                     ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
                                 IconButton(
@@ -229,7 +260,7 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
                                     size: 20,
                                     color: Colors.white70,
                                   ),
-                                  onPressed: () => _showDetail(context, d),
+                                  onPressed: () => _showDetail(context, promo),
                                 ),
                               ],
                             ),
@@ -258,7 +289,7 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
                                 );
                               },
                               child: Text(
-                                '-$valueStr',
+                                headlineValue,
                                 style: GoogleFonts.fredokaOne(
                                   fontSize: 22,
                                   fontWeight: FontWeight.bold,
@@ -299,17 +330,22 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
     );
   }
 
-  void _showDetail(BuildContext ctx, Map<String, dynamic> d) {
-    final isPercent = d['discount_type'] == 'percent';
-    // Исправлено: отображаем только целые числа
-    final value = d['value'];
-    final valueStr = isPercent
-        ? '${(value is num ? value.toInt() : int.tryParse(value.toString()) ?? value)}%'
-        : '€${(value is num ? value.toInt() : int.tryParse(value.toString()) ?? value)}';
-    final title = d['name'] ?? 'Angebot';
-    final desc = (d['description'] ?? '').toString().trim();
-    final period = (d['start_at'] != null ? _formatDate(d['start_at']) : '') +
-        (d['end_at'] != null ? ' – ${_formatDate(d['end_at'])}' : '');
+  void _showDetail(BuildContext ctx, Promotion promo) {
+    final title = promo.name.isNotEmpty ? promo.name : 'Angebot';
+    final desc = (promo.description ?? '').trim();
+    final start = _formatDate(promo.startsAt.toIso8601String());
+    final end = promo.endsAt != null
+        ? _formatDate(promo.endsAt!.toIso8601String())
+        : '';
+    String period = '';
+    if (start.isNotEmpty && end.isNotEmpty) {
+      period = '$start – $end';
+    } else if (start.isNotEmpty) {
+      period = 'Ab: $start';
+    } else if (end.isNotEmpty) {
+      period = 'Bis: $end';
+    }
+    final detailValue = _detailValue(promo);
 
     showModalBottomSheet(
       context: ctx,
@@ -345,7 +381,16 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
               ),
               const SizedBox(height: 10),
               Text(
-                valueStr,
+                _badgeLabel(promo),
+                style: GoogleFonts.poppins(
+                  color: Colors.orangeAccent,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                detailValue,
                 style: GoogleFonts.poppins(
                   color: Colors.yellowAccent,
                   fontWeight: FontWeight.bold,

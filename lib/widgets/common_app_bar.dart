@@ -2,9 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/cart_service.dart';
-import '../screens/cart_screen.dart';
 import '../utils/globals.dart';  
 import '../theme/theme_provider.dart';
 
@@ -37,7 +35,7 @@ PreferredSizeWidget buildCommonAppBar({
               top: 6,
               child: Container(
                 padding: const EdgeInsets.all(2),
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                     color: Colors.red, shape: BoxShape.circle),
                 constraints:
                     const BoxConstraints(minWidth: 16, minHeight: 16),

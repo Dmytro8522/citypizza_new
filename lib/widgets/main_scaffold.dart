@@ -19,7 +19,7 @@ import '../screens/email_login_screen.dart';
 import '../screens/email_signup_screen.dart';
 
 class MainScaffold extends StatefulWidget {
-  const MainScaffold({Key? key}) : super(key: key);
+  const MainScaffold({super.key});
 
   @override
   State<MainScaffold> createState() => _MainScaffoldState();
@@ -87,7 +87,7 @@ class _MainScaffoldState extends State<MainScaffold> {
               );
             case '/checkout':
               final args = settings.arguments as Map<String, dynamic>;
-              final total = args['totalSum'] as double;
+              final total = (args['totalSum'] as double?) ?? 0.0;
               final comments =
                   (args['itemComments'] as Map).cast<String, String>();
               return MaterialPageRoute(

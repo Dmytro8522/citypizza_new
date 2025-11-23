@@ -1,88 +1,29 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../widgets/no_internet_widget.dart';
+import '../services/discount_service.dart';
 
 class DiscountsScreen extends StatefulWidget {
-  const DiscountsScreen({Key? key}) : super(key: key);
+  const DiscountsScreen({super.key});
 
   @override
   State<DiscountsScreen> createState() => _DiscountsScreenState();
 }
 
 class _DiscountsScreenState extends State<DiscountsScreen> {
-  late Future<List<Map<String, dynamic>>> _discountsFuture;
+  late Future<List<Promotion>> _promosFuture;
 
   @override
   void initState() {
     super.initState();
-    _discountsFuture = fetchDiscounts();
+    _promosFuture = fetchPromotions();
   }
 
-  Future<List<Map<String, dynamic>>> fetchDiscounts() async {
-    final now = DateTime.now().toIso8601String();
-
-    // Берём все активные скидки, чья дата старта <= сейчас, и дата окончания либо null, либо >= сейчас
-    final discounts = await Supabase.instance.client
-        .from('discounts')
-        .select()
-        .eq('active', true)
-        .lte('start_at', now);
-
-    // Берём все targets для найденных скидок
-    final ids = discounts.map((d) => d['id']).toList();
-    Map<int, List<Map<String, dynamic>>> targetsMap = {};
-    if (ids.isNotEmpty) {
-      final targets = await Supabase.instance.client
-          .from('discount_targets')
-          .select()
-          .filter('discount_id', 'in', ids);
-      for (final t in targets) {
-        final dId = t['discount_id'] as int;
-        targetsMap.putIfAbsent(dId, () => []).add(t);
-      }
-    }
-
-    // Объединяем скидки с их target-ами
-    return discounts.map<Map<String, dynamic>>((d) {
-      final dId = d['id'] as int;
-      return {
-        ...d,
-        'targets': targetsMap[dId] ?? [],
-      };
-    }).toList();
+  Future<List<Promotion>> fetchPromotions() async {
+    return fetchActivePromotions(at: DateTime.now());
   }
 
-  String _formatTarget(Map<String, dynamic> target) {
-    final type = target['target_type'];
-    final value = target['target_value'];
-    switch (type) {
-      case 'all':
-        return 'Für alle Bestellungen';
-      case 'category':
-        return 'Nur für Kategorie: $value';
-      case 'item':
-        return 'Nur für Artikel: $value';
-      case 'user':
-        return 'Persönliche Aktion';
-      case 'user_group':
-        return 'Für Gruppe: $value';
-      case 'promo_code':
-        return 'Mit Code: $value';
-      case 'birthday':
-        return 'Zum Geburtstag';
-      case 'holiday':
-        return 'Zum Feiertag';
-      case 'first_order':
-        return 'Für die erste Bestellung';
-      case 'delivery_type':
-        return 'Nur für: $value';
-      case 'payment_type':
-        return 'Nur bei Zahlung: $value';
-      default:
-        return type != null ? type.toString() : 'Sonderaktion';
-    }
-  }
+  
 
   @override
   Widget build(BuildContext context) {
@@ -97,24 +38,20 @@ class _DiscountsScreenState extends State<DiscountsScreen> {
         iconTheme: const IconThemeData(color: Colors.orange),
         elevation: 0,
       ),
-      body: FutureBuilder<List<Map<String, dynamic>>>(
-        future: _discountsFuture,
+      body: FutureBuilder<List<Promotion>>(
+        future: _promosFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator(color: Colors.orange));
           } else if (snapshot.hasError) {
             return NoInternetWidget(
-              onRetry: () {
-                setState(() {
-                  _discountsFuture = fetchDiscounts();
-                });
-              },
+              onRetry: () { setState(() { _promosFuture = fetchPromotions(); }); },
               errorText: snapshot.error.toString().contains('SocketException')
                   ? 'Keine Internetverbindung'
                   : 'Fehler beim Laden der Angebote.',
             );
           } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return Center(
+            return const Center(
               child: Text(
                 'Zurzeit gibt es keine aktiven Angebote.',
                 style: TextStyle(color: Colors.white),
@@ -122,25 +59,31 @@ class _DiscountsScreenState extends State<DiscountsScreen> {
             );
           }
 
-          final discounts = snapshot.data!;
+          final promotions = snapshot.data!;
 
           return ListView.separated(
             padding: const EdgeInsets.all(16),
-            itemCount: discounts.length,
+            itemCount: promotions.length,
             separatorBuilder: (_, __) => const SizedBox(height: 16),
             itemBuilder: (context, idx) {
-              final d = discounts[idx];
-              final isPercent = d['discount_type'] == 'percent';
-              // Исправлено: отображаем только целые числа
-              final value = d['value'];
-              final valueStr = isPercent
-                  ? "${(value is num ? value.toInt() : int.tryParse(value.toString()) ?? value)}%"
-                  : "€${(value is num ? value.toInt() : int.tryParse(value.toString()) ?? value)}";
+        final d = promotions[idx];
+    final type = d.discountType
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'\s+'), '_')
+      .replaceAll('-', '_');
+  final isDiscountReduction = !type.startsWith('fixed_price');
+  final rawValue = d.discountValue.abs();
+    final decimals = rawValue.truncateToDouble() == rawValue ? 0 : 2;
+    final formatted = rawValue.toStringAsFixed(decimals);
+  final baseValue = type.contains('percent') ? "$formatted%" : "€$formatted";
+    final badgeText = isDiscountReduction
+      ? "Rabatt: -$baseValue"
+      : "Aktionspreis: $baseValue";
               final dateFormat = DateFormat('dd.MM.yyyy');
-              final start = d['start_at'] != null ? dateFormat.format(DateTime.parse(d['start_at'])) : '';
-              final end = d['end_at'] != null ? dateFormat.format(DateTime.parse(d['end_at'])) : '';
-              final minOrder = d['min_order'] ?? 0;
-              final targets = (d['targets'] ?? []) as List;
+              final start = dateFormat.format(d.startsAt);
+              final end = d.endsAt != null ? dateFormat.format(d.endsAt!) : '';
+              final targets = d.targets;
 
               return Container(
                 decoration: BoxDecoration(
@@ -153,7 +96,7 @@ class _DiscountsScreenState extends State<DiscountsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      d['name'] ?? '',
+                      d.name,
                       style: const TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
@@ -161,9 +104,9 @@ class _DiscountsScreenState extends State<DiscountsScreen> {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    if ((d['description'] ?? '').isNotEmpty)
+                    if ((d.description ?? '').isNotEmpty)
                       Text(
-                        d['description'],
+                        d.description!,
                         style: const TextStyle(
                           fontSize: 16,
                           color: Colors.white70,
@@ -181,7 +124,7 @@ class _DiscountsScreenState extends State<DiscountsScreen> {
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: Text(
-                              "Rabatt: $valueStr",
+                              badgeText,
                               style: const TextStyle(
                                 color: Colors.orange,
                                 fontSize: 16,
@@ -189,21 +132,6 @@ class _DiscountsScreenState extends State<DiscountsScreen> {
                               ),
                             ),
                           ),
-                          if (minOrder > 0)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: Colors.orange.withOpacity(0.12),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Text(
-                                "Mindestbestellwert: €$minOrder",
-                                style: const TextStyle(
-                                  color: Colors.orange,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
                         ],
                       ),
                     const SizedBox(height: 10),
@@ -224,7 +152,7 @@ class _DiscountsScreenState extends State<DiscountsScreen> {
                       ...targets.map((t) => Padding(
                         padding: const EdgeInsets.only(bottom: 2),
                         child: Text(
-                          _formatTarget(t),
+                          _formatTargetNew(t),
                           style: const TextStyle(
                             color: Colors.orange,
                             fontSize: 14,
@@ -240,5 +168,20 @@ class _DiscountsScreenState extends State<DiscountsScreen> {
         },
       ),
     );
+  }
+
+  String _formatTargetNew(PromotionTarget t) {
+    switch (t.targetType) {
+      case 'category':
+        return 'Kategorie-ID: ${t.categoryId}';
+      case 'item':
+        return 'Artikel-ID: ${t.itemId}';
+      case 'category_size':
+        return 'Kategorie ${t.categoryId}, Größe ${t.sizeId}';
+      case 'item_size':
+        return 'Artikel ${t.itemId}, Größe ${t.sizeId}';
+      default:
+        return t.targetType;
+    }
   }
 }

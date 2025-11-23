@@ -7,10 +7,10 @@ class ScreenPadding extends StatelessWidget {
   final double bottomPadding;
 
   const ScreenPadding({
-    Key? key,
+    super.key,
     required this.child,
     this.bottomPadding = 68, // Это высота твоего меню! Можно скорректировать.
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

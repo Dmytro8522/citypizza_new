@@ -7,11 +7,9 @@ import 'dart:io';
 
 import '../widgets/common_app_bar.dart';
 import '../utils/globals.dart';
-import 'email_signup_screen.dart';
-import 'email_login_screen.dart';
 
 class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({Key? key}) : super(key: key);
+  const ProfileScreen({super.key});
 
   Widget _buildBenefit({
     required IconData icon,

@@ -12,10 +12,10 @@ class RecentOrderCard extends StatelessWidget {
   final VoidCallback? onTap;
 
   const RecentOrderCard({
-    Key? key,
+    super.key,
     required this.item,
     this.onTap,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -121,7 +121,7 @@ class RecentOrderCard extends StatelessWidget {
           width: 64,
           height: 64,
           color: Colors.grey[300],
-          child: Icon(Icons.fastfood, size: 32, color: Colors.grey),
+          child: const Icon(Icons.fastfood, size: 32, color: Colors.grey),
         );
       },
     );
@@ -134,6 +134,6 @@ class RecentOrderCard extends StatelessWidget {
         .select('image_url')
         .eq('id', itemId)
         .maybeSingle();
-    return res as Map<String, dynamic>?;
+    return res;
   }
 }

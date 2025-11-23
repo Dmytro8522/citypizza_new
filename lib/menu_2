@@ -1,0 +1,545 @@
+# Полный справочник схемы «menu_v2» (паспорт для разработчиков)
+
+Документ описывает **назначение таблиц**, **поля (с типами, дефолтами, ограничениями)**, **связи**, **бизнес‑логику**, **порядок загрузки данных**, **типовые запросы** и **частые ошибки**. Ориентирован на PostgreSQL/Supabase.
+
+> Базовая идея: каталог = Категории → Позиции → Цены по размерам. Дополнения (экстры), модификаторы (выбор без доплаты), допродажи (upsell) и комбо (bundles) конфигурируются сверху (категория) и переопределяются снизу (позиция).
+
+---
+
+## 0) Глоссарий и общие правила
+
+* **Размеры**: общий справочник `menu_size`. Для «безразмерных» позиций используем запись с размером **Normal**.
+* **Доступность**: есть «включена ли позиция вообще» (`is_active`) и «временно доступна ли» (`is_available`), а также доступность **конкретного размера** (`item_size_price.is_available`).
+* **НДС (VAT)**: ставка может быть на категории и/или на позиции; позиция перекрывает категорию.
+* **Pfand/Тара**: поддерживается, можно не включать сразу.
+* **Наследование настроек**: Экстры, модификаторы, upsell берутся с категории. Если на позиции есть оверрайды — они заменяют категорийные.
+* **История цен**: хранится отдельно, не участвует в чтении каталога.
+
+---
+
+## 1) Категории и размеры
+
+### `menu_v2_category` — разделы каталога
+
+**Назначение:** группирует позиции, задаёт дефолтные параметры (видимость, VAT), точки подключения upsell/модификаторов/экстр.
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `name TEXT NOT NULL` — понятное имя раздела.
+* `description TEXT NULL` — описание.
+* `sort_order INT NOT NULL DEFAULT 0` — порядок в списке.
+* `is_active BOOL NOT NULL DEFAULT TRUE` — использовать/выключить раздел.
+* `is_hidden BOOL NOT NULL DEFAULT FALSE` — скрыть раздел в клиенте (например, в работе).
+* `vat_rate NUMERIC(4,2) NULL` — ставка НДС, если нужна единая для раздела.
+
+**Связи:**
+
+* 1→N `menu_v2_item(category_id)` (ON DELETE SET NULL)
+* 1→N `menu_v2_category_allowed_extras`
+* 1→N `menu_v2_category_modifier_group`
+* 1→N `menu_v2_category_upsell_group`
+
+**Индексы/уникальности:**
+
+* `(sort_order)` — для сортировки
+* `(is_active, is_hidden)` — фильтрация каталога
+
+**Типичные операции:** CRUD, смена порядка, массовое включение/скрытие.
+
+---
+
+### `menu_size` — общий справочник размеров (существует)
+
+**Назначение:** глобальные размеры (Klein, Normal, Gross, Familie, Party).
+
+**Критично:** запись `Normal` должна существовать — опорная для «безразмерных» позиций.
+
+**Минимальные поля:** `id PK`, `name TEXT UNIQUE`, `sort_order INT`, `is_deleted BOOL`, опционально `extra_price NUMERIC` (не используется в v2 для расчёта, но можно хранить).
+
+---
+
+## 2) Позиции и цены по размерам
+
+### `menu_v2_item` — карточка позиции
+
+**Назначение:** базовые свойства блюда/товара.
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `category_id BIGINT NULL FK → menu_v2_category(id) ON DELETE SET NULL`
+* `sku TEXT NULL` — внутренний код/артикул.
+* `name TEXT NOT NULL`
+* `description TEXT NULL`
+* `image_url TEXT NULL`
+* `has_sizes BOOL NOT NULL DEFAULT TRUE` — есть ли разные размеры (если FALSE — используем только Normal).
+* `is_active BOOL NOT NULL DEFAULT TRUE` — скрыть/включить вообще.
+* `is_available BOOL NOT NULL DEFAULT TRUE` — временная доступность всей позиции.
+* `vat_rate NUMERIC(4,2) NULL` — ставка НДС (перекрывает категорию).
+* `pfand_included BOOL NOT NULL DEFAULT TRUE` — логический флаг про учёт pfand в цене.
+
+**Индексы:** `(category_id)`, `(is_active,is_available)`.
+
+**Типичные операции:** CRUD, перенос между категориями, массовое отключение.
+
+---
+
+### `menu_v2_item_size_price` — цена позиции по размеру
+
+**Назначение:** хранит цену и доступность каждого размера позиции.
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `item_id BIGINT NOT NULL FK → menu_v2_item(id) ON DELETE CASCADE`
+* `size_id INT NOT NULL FK → menu_size(id)`
+* `price NUMERIC(10,2) NOT NULL`
+* `is_available BOOL NOT NULL DEFAULT TRUE` — доступность именно этого размера.
+
+**Ограничения:** `UNIQUE(item_id, size_id)`.
+
+**Индексы:** `(item_id)`, `(size_id)`.
+
+**Бизнес‑правила:** если `item.has_sizes=FALSE`, поддерживается ровно одна запись с `size_id = Normal`.
+
+---
+
+### `menu_v2_item_price_history` — история цен (опционально)
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `item_id BIGINT NOT NULL FK → menu_v2_item(id) ON DELETE CASCADE`
+* `size_id INT NOT NULL FK → menu_size(id)`
+* `price NUMERIC(10,2) NOT NULL`
+* `valid_from TIMESTAMPTZ NOT NULL DEFAULT now()`
+* `valid_to TIMESTAMPTZ NULL`
+
+**Замечания:** не влияет на чтение каталога; использовать для отчётности и аудита.
+
+---
+
+## 3) Аллергены
+
+### `menu_v2_allergen` — справочник аллергенов/добавок
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `code TEXT NOT NULL UNIQUE` — короткий код (совместим с существующими additives.code)
+* `title TEXT NOT NULL` — человекочитаемое название
+
+### `menu_v2_item_allergen` — связь позиция↔аллерген
+
+**Поля/ключи:**
+
+* `item_id BIGINT NOT NULL FK → menu_v2_item(id) ON DELETE CASCADE`
+* `allergen_id BIGINT NOT NULL FK → menu_v2_allergen(id) ON DELETE CASCADE`
+* `relation_type TEXT NOT NULL DEFAULT 'contains'` — допустимые значения: `'contains' | 'may_contain'`
+* **PK(item_id, allergen_id, relation_type)**
+
+**Замечания:** позволяет хранить и «содержит», и «может содержать» одновременно.
+
+---
+
+## 4) Экстры (доп. ингредиенты) и их цены
+
+### `menu_v2_extra` — справочник экстр
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `sku TEXT NULL`
+* `name TEXT NOT NULL`
+* `description TEXT NULL`
+* `is_active BOOL NOT NULL DEFAULT TRUE`
+
+### `menu_v2_extra_price_by_size` — цена экстра по размеру
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `extra_id BIGINT NOT NULL FK → menu_v2_extra(id) ON DELETE CASCADE`
+* `size_id INT NOT NULL FK → menu_size(id)`
+* `price NUMERIC(10,2) NOT NULL`
+
+**Ограничения:** `UNIQUE(extra_id, size_id)`.
+
+**Логика расчёта:** цена экстра зависит **только от размера** позиции, к которой экстра применяется. Для безразмерных позиций использовать цену для размера **Normal**.
+
+---
+
+### Разрешение экстр (белые списки)
+
+#### `menu_v2_category_allowed_extras`
+
+**Назначение:** экстра, разрешённые по категории «по умолчанию».
+
+* `id BIGSERIAL PK`
+* `category_id BIGINT NOT NULL FK → menu_v2_category(id) ON DELETE CASCADE`
+* `extra_id BIGINT NOT NULL FK → menu_v2_extra(id) ON DELETE CASCADE`
+* **UNIQUE(category_id, extra_id)**
+
+#### `menu_v2_item_allowed_extras`
+
+**Назначение:** оверрайд на карточке позиции — перечисляет экстра, которые показывать **вместо** категорийных.
+
+* `id BIGSERIAL PK`
+* `item_id BIGINT NOT NULL FK → menu_v2_item(id) ON DELETE CASCADE`
+* `extra_id BIGINT NOT NULL FK → menu_v2_extra(id) ON DELETE CASCADE`
+* **UNIQUE(item_id, extra_id)**
+
+> Поведение фронта: если у позиции есть записи в `item_allowed_extras` — показываем только их. Если нет — показываем `category_allowed_extras`.
+
+#### `menu_v2_extra_incompatibility` (опционально)
+
+* `id BIGSERIAL PK`
+* `extra_id_a BIGINT NOT NULL FK → menu_v2_extra(id)`
+* `extra_id_b BIGINT NOT NULL FK → menu_v2_extra(id)`
+* **UNIQUE(extra_id_a, extra_id_b)** (хранить упорядоченную пару)
+
+**Назначение:** запрет одновременного выбора несовместимых экстр (например, «без сыра» вместе с «доп. сыр»).
+
+---
+
+## 5) Модификаторы (выбор без доплаты)
+
+### `menu_v2_modifier_group` — группа выбора
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `name TEXT NOT NULL` — например, «Тип пасты», «Соус к салату»
+* `min_select INT NOT NULL DEFAULT 0` — минимум выбора
+* `max_select INT NOT NULL DEFAULT 1` — максимум выбора (0 = нет ограничений)
+* `sort_order INT NOT NULL DEFAULT 0`
+
+### `menu_v2_modifier_option` — опция внутри группы
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `group_id BIGINT NOT NULL FK → menu_v2_modifier_group(id) ON DELETE CASCADE`
+* `name TEXT NOT NULL`
+* `sort_order INT NOT NULL DEFAULT 0`
+
+### Привязки по умолчанию (категория) и оверрайд (позиция)
+
+#### `menu_v2_category_modifier_group`
+
+* `id BIGSERIAL PK`
+* `category_id BIGINT NOT NULL FK → menu_v2_category(id) ON DELETE CASCADE`
+* `group_id BIGINT NOT NULL FK → menu_v2_modifier_group(id) ON DELETE CASCADE`
+* `sort_order INT NOT NULL DEFAULT 0`
+* **UNIQUE(category_id, group_id)**
+
+#### `menu_v2_item_modifier_group_override`
+
+* `id BIGSERIAL PK`
+* `item_id BIGINT NOT NULL FK → menu_v2_item(id) ON DELETE CASCADE`
+* `group_id BIGINT NOT NULL FK → menu_v2_modifier_group(id) ON DELETE CASCADE`
+* `enabled BOOL NOT NULL DEFAULT TRUE` — можно выключить группу на позиции
+* `sort_order INT NOT NULL DEFAULT 0`
+* **UNIQUE(item_id, group_id)**
+
+**Правило фронта:** показываем все групповые модификаторы категории, за исключением отключённых оверрайдом на позиции; порядок — `item_override.sort_order` или `category.sort_order`.
+
+---
+
+## 6) Upsell (допродажи)
+
+### `menu_v2_upsell_group`
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `name TEXT NOT NULL`
+* `max_items INT NULL` — ограничение на число показываемых карточек
+* `sort_order INT NOT NULL DEFAULT 0`
+
+### `menu_v2_upsell_group_source` — источники карточек
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `upsell_group_id BIGINT NOT NULL FK → menu_v2_upsell_group(id) ON DELETE CASCADE`
+* `include_type TEXT NOT NULL CHECK (include_type IN ('category','item'))`
+* `category_id BIGINT NULL`
+* `item_id BIGINT NULL`
+
+**Поведение:** строки описывают union источников — либо целые категории, либо отдельные позиции.
+
+### Привязки по умолчанию/оверрайды
+
+#### `menu_v2_category_upsell_group`
+
+* `id BIGSERIAL PK`
+* `category_id BIGINT NOT NULL FK → menu_v2_category(id) ON DELETE CASCADE`
+* `upsell_group_id BIGINT NOT NULL FK → menu_v2_upsell_group(id) ON DELETE CASCADE`
+* `sort_order INT NOT NULL DEFAULT 0`
+* **UNIQUE(category_id, upsell_group_id)**
+
+#### `menu_v2_item_upsell_group_override`
+
+* `id BIGSERIAL PK`
+* `item_id BIGINT NOT NULL FK → menu_v2_item(id) ON DELETE CASCADE`
+* `upsell_group_id BIGINT NOT NULL FK → menu_v2_upsell_group(id) ON DELETE CASCADE`
+* `enabled BOOL NOT NULL DEFAULT TRUE`
+* `sort_order INT NOT NULL DEFAULT 0`
+* **UNIQUE(item_id, upsell_group_id)**
+
+**Правило фронта:** берём групповые upsell категории, затем применяем оверрайд позиции (`enabled=false` скрывает группу, `sort_order` меняет порядок).
+
+---
+
+## 7) Комбо/Наборы (Burger‑/Party‑Menü)
+
+### `menu_v2_bundle` — карточка набора
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `category_id BIGINT NULL FK → menu_v2_category(id) ON DELETE SET NULL`
+* `sku TEXT NULL`
+* `name TEXT NOT NULL`
+* `description TEXT NULL`
+* `image_url TEXT NULL`
+* `is_active BOOL NOT NULL DEFAULT TRUE`
+
+### `menu_v2_bundle_price_by_size` — цена набора по размеру
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `bundle_id BIGINT NOT NULL FK → menu_v2_bundle(id) ON DELETE CASCADE`
+* `size_id INT NOT NULL FK → menu_size(id)`
+* `price NUMERIC(10,2) NOT NULL`
+* **UNIQUE(bundle_id, size_id)**
+
+### `menu_v2_bundle_slot` — слоты выбора
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `bundle_id BIGINT NOT NULL FK → menu_v2_bundle(id) ON DELETE CASCADE`
+* `name TEXT NOT NULL` — «Пицца Familie», «Паста ×2», «Салат ×2», «Напиток ×1»
+* `min_qty INT NOT NULL DEFAULT 1` — минимум обязательного выбора
+* `max_qty INT NOT NULL DEFAULT 1` — максимум; если >1 — можно выбрать несколько
+* `allow_paid_upgrade BOOL NOT NULL DEFAULT FALSE` — разрешить платные апгрейды/доплаты
+* `sort_order INT NOT NULL DEFAULT 0`
+
+### `menu_v2_bundle_slot_allowed` — допустимые элементы слота
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `slot_id BIGINT NOT NULL FK → menu_v2_bundle_slot(id) ON DELETE CASCADE`
+* `include_type TEXT NOT NULL CHECK (include_type IN ('category','item'))`
+* `category_id BIGINT NULL`
+* `item_id BIGINT NULL`
+* `size_id INT NULL` — можно фиксировать требуемый размер выбранной позиции
+
+### `menu_v2_bundle_slot_extra_policy` — политика экстр в слоте
+
+**Поля:**
+
+* `id BIGSERIAL PK`
+* `slot_id BIGINT NOT NULL FK → menu_v2_bundle_slot(id) ON DELETE CASCADE`
+* `included_extras_count INT NOT NULL DEFAULT 0` — сколько экстр включено «в цену»
+* `allow_paid_extras BOOL NOT NULL DEFAULT TRUE` — можно ли докупать сверх включённых
+
+**Расчёт цены слота/набора:** цена набора + (включённые `included_extras_count` = 0€; сверх — по `menu_v2_extra_price_by_size` от фактического размера выбранной позиции или фиксированного `size_id`).
+
+---
+
+## 8) Pfand / тара (опционально)
+
+### `menu_v2_container_type`
+
+* `id BIGSERIAL PK`
+* `name TEXT NOT NULL` — тип тары («Бутылка 1.0l», «Стекло 0.5l»)
+* `pfand_amount NUMERIC(10,2) NOT NULL`
+
+### `menu_v2_item_container`
+
+* `id BIGSERIAL PK`
+* `item_id BIGINT NOT NULL FK → menu_v2_item(id) ON DELETE CASCADE`
+* `container_id BIGINT NOT NULL FK → menu_v2_container_type(id) ON DELETE RESTRICT`
+* **UNIQUE(item_id, container_id)**
+
+**Поведение:** если считаешь pfand отдельно — добавляй сумму по связи item→container.
+
+---
+
+## 9) Порядок загрузки данных (миграции/импорт)
+
+1. `menu_v2_category`, затем `menu_v2_item`.
+2. `menu_size` (убедиться, что есть `Normal`).
+3. `menu_v2_item_size_price` (цены по размерам). Для безразмерных — только запись с `Normal`.
+4. `menu_v2_allergen` и `menu_v2_item_allergen` (при необходимости).
+5. `menu_v2_extra` → `menu_v2_extra_price_by_size` → разрешения: `category_allowed_extras` и/или `item_allowed_extras`.
+6. Модификаторы: `modifier_group` → `modifier_option` → `category_modifier_group` → `item_modifier_group_override`.
+7. Upsell: `upsell_group` → `upsell_group_source` → `category_upsell_group` → `item_upsell_group_override`.
+8. Bundles: `bundle` → `bundle_price_by_size` → `bundle_slot` → `bundle_slot_allowed` → `bundle_slot_extra_policy`.
+9. Pfand: `container_type` → `item_container`.
+
+**Рекомендации:** использовать idempotent‑вставки (UPSERT по уникальным ключам), предварительную дедупликацию источников.
+
+---
+
+## 10) Типовые запросы (шаблоны)
+
+### 10.1 Каталог с позициями и доступными размерами
+
+```sql
+SELECT c.id   AS category_id, c.name AS category_name,
+       i.id   AS item_id,     i.name AS item_name,
+       sp.size_id, sp.price, sp.is_available
+FROM menu_v2_category c
+JOIN menu_v2_item i ON i.category_id = c.id AND i.is_active
+LEFT JOIN menu_v2_item_size_price sp ON sp.item_id = i.id
+WHERE c.is_active AND NOT c.is_hidden
+ORDER BY c.sort_order, i.name;
+```
+
+### 10.2 Экстры для позиции с учётом оверрайда и цены выбранного размера
+
+```sql
+WITH allow_item AS (
+  SELECT e.id FROM menu_v2_item_allowed_extras ia
+  JOIN menu_v2_extra e ON e.id=ia.extra_id
+  WHERE ia.item_id = $1
+),
+allow_cat AS (
+  SELECT e.id FROM menu_v2_item it
+  JOIN menu_v2_category_allowed_extras ca ON ca.category_id=it.category_id
+  JOIN menu_v2_extra e ON e.id=ca.extra_id
+  WHERE it.id = $1
+),
+allowed AS (
+  SELECT id FROM allow_item
+  UNION
+  SELECT id FROM allow_cat WHERE NOT EXISTS (SELECT 1 FROM allow_item)
+)
+SELECT e.id AS extra_id, e.name,
+       ep.size_id, ep.price
+FROM menu_v2_extra e
+JOIN allowed a ON a.id=e.id
+JOIN menu_v2_item it ON it.id=$1
+JOIN menu_v2_item_size_price isp ON isp.item_id=it.id AND isp.size_id=$2      -- выбранный размер
+JOIN menu_v2_extra_price_by_size ep ON ep.extra_id=e.id AND ep.size_id=$2
+ORDER BY e.name;
+```
+
+### 10.3 Модификаторы для позиции (с оверрайдами)
+
+```sql
+WITH base AS (
+  SELECT g.*, cmg.sort_order FROM menu_v2_category_modifier_group cmg
+  JOIN menu_v2_item i ON i.category_id=cmg.category_id
+  JOIN menu_v2_modifier_group g ON g.id=cmg.group_id
+  WHERE i.id=$1
+),
+ovr AS (
+  SELECT og.group_id, og.enabled, og.sort_order FROM menu_v2_item_modifier_group_override og
+  WHERE og.item_id=$1
+)
+SELECT b.id, b.name,
+       COALESCE(o.sort_order, b.sort_order) AS sort_order
+FROM base b
+LEFT JOIN ovr o ON o.group_id=b.id
+WHERE o.enabled IS DISTINCT FROM FALSE
+ORDER BY sort_order;
+```
+
+### 10.4 Upsell для позиции
+
+```sql
+SELECT ug.id, ug.name, ug.max_items,
+       COALESCE(igo.sort_order, cug.sort_order) AS sort_order
+FROM menu_v2_item i
+JOIN menu_v2_category_upsell_group cug ON cug.category_id=i.category_id
+JOIN menu_v2_upsell_group ug ON ug.id=cug.upsell_group_id
+LEFT JOIN menu_v2_item_upsell_group_override igo
+       ON igo.item_id=i.id AND igo.upsell_group_id=ug.id
+WHERE i.id=$1 AND COALESCE(igo.enabled, TRUE)
+ORDER BY sort_order;
+```
+
+### 10.5 Аллергены позиции
+
+```sql
+SELECT a.code, a.title, ia.relation_type
+FROM menu_v2_item_allergen ia
+JOIN menu_v2_allergen a ON a.id=ia.allergen_id
+WHERE ia.item_id=$1;
+```
+
+### 10.6 Bundle: состав и правила
+
+```sql
+SELECT b.id, b.name, bp.size_id, bp.price
+FROM menu_v2_bundle b
+LEFT JOIN menu_v2_bundle_price_by_size bp ON bp.bundle_id=b.id
+WHERE b.id=$1;
+
+SELECT s.id AS slot_id, s.name, s.min_qty, s.max_qty, s.allow_paid_upgrade, s.sort_order
+FROM menu_v2_bundle_slot s
+WHERE s.bundle_id=$1
+ORDER BY s.sort_order;
+
+SELECT sa.slot_id, sa.include_type, sa.category_id, sa.item_id, sa.size_id
+FROM menu_v2_bundle_slot_allowed sa
+JOIN menu_v2_bundle_slot s ON s.id=sa.slot_id
+WHERE s.bundle_id=$1;
+```
+
+---
+
+## 11) Обработка на фронте (краткий контракт)
+
+* **Каталог**: фильтруем категории `is_active & !is_hidden` и позиции `is_active`. Размеры — из `item_size_price.is_available=true`.
+* **Карточка позиции**:
+
+  * Цены — из `item_size_price` для выбранного размера; если `has_sizes=false`, доступен только `Normal`.
+  * Экстры — `item_allowed_extras` или `category_allowed_extras` (если первых нет). Цена экстр = `extra_price_by_size` с тем же `size_id`.
+  * Модификаторы — категорийные минус отключённые оверрайдом; порядок по `sort_order`.
+  * Upsell — категорийные с учётом оверрайдов.
+  * Аллергены — `item_allergen`.
+  * VAT — `item.vat_rate` → `category.vat_rate` → глобальна.
+  * Pfand — если используется, суммировать по `item_container`.
+* **Wunsch/Комбо**: в слоте учесть `included_extras_count` — первые N экстр бесплатны, сверх — по прайсу.
+
+---
+
+## 12) Частые ошибки и как чинить
+
+* **Нет размера Normal** → добавить в `menu_size` (`INSERT ... WHERE NOT EXISTS ...`).
+* **Дубли `UNIQUE(item_id,size_id)`/`UNIQUE(extra_id,size_id)`** → предварительно дедуплировать источник `DISTINCT ON (...) ORDER BY id DESC`.
+* **FK не находятся при импорте** → сначала загрузить справочники (`item`, `extra`, `allergen`, `size`), затем связывающие таблицы.
+* **Оверрайды не работают** → проверь, что для позиции реально есть строки в `*_override`; если да — фронт должен приоритетно брать их.
+* **Пустые экстры** → помни про иерархию: если `item_allowed_extras` пуст, показывать `category_allowed_extras`.
+
+---
+
+## 13) Мини‑чек‑лист перед продом
+
+* [ ] `menu_size` содержит `Normal`.
+* [ ] У всех позиций с `has_sizes=false` есть одна цена c size=Normal.
+* [ ] Категории активны и отсортированы.
+* [ ] Цены по размерам заполнены; отсутствующие размеры помечены `is_available=false` или не заведены.
+* [ ] Экстры заведены + цены по размерам + разрешения (категория/позиция).
+* [ ] Модификаторы: группы, опции, привязки и оверрайды проверены.
+* [ ] Upsell‑группы привязаны к категориям; отключённые оверрайды отмечены.
+* [ ] Bundles: цены, слоты, разрешённые элементы и политика экстр настроены.
+* [ ] VAT/Pfand заданы, если используются.
+* [ ] Индексы/UNIQUE соответствуют описанию.
+
+---
+
+### Примечание по Supabase
+
+* Все таблицы можно описывать миграциями SQL. Для админки: CRUD по таблицам с валидацией `CHECK`, `UNIQUE` и FK; для выпадающих списков использовать справочники (`menu_size`, `menu_v2_extra`, `menu_v2_modifier_group`, и т.д.).
+
+> Готово: документ покрывает назначение, структуру, связи, правила и примеры запросов. Если нужна DDL‑схема (CREATE TABLE со всеми ограничениями) — добавлю отдельным разделом.

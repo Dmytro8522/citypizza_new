@@ -71,7 +71,7 @@ class AuthService {
           .maybeSingle();
       
       debugPrint('📦 AuthService getProfile result: $res');
-      return res as Map<String, dynamic>?;
+      return res;
     } catch (e) {
       debugPrint('❌ AuthService getProfile error: $e');
       return null;

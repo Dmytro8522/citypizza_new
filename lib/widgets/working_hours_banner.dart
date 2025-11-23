@@ -8,7 +8,7 @@ import '../utils/globals.dart';
 
 class WorkingHoursBanner extends StatefulWidget {
   final double bottomInset;
-  const WorkingHoursBanner({Key? key, this.bottomInset = 0}) : super(key: key);
+  const WorkingHoursBanner({super.key, this.bottomInset = 0});
 
   @override
   State<WorkingHoursBanner> createState() => _WorkingHoursBannerState();
@@ -77,10 +77,11 @@ class _WorkingHoursBannerState extends State<WorkingHoursBanner>
   }
 
   void _showHoursDialog() {
-    final ctx = navigatorKey.currentContext!;
+    final ctx = navigatorKey.currentContext;
+    if (ctx == null) return;
     showDialog(
       context: ctx,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: const Text('Öffnungszeiten'),
         content: const Text(
           'Montag: 11:00–14:30, 17:00–23:00\n'
@@ -89,7 +90,8 @@ class _WorkingHoursBannerState extends State<WorkingHoursBanner>
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () =>
+                Navigator.of(dialogCtx, rootNavigator: true).maybePop(),
             child: const Text('Schließen'),
           ),
         ],
@@ -101,14 +103,13 @@ class _WorkingHoursBannerState extends State<WorkingHoursBanner>
   Widget build(BuildContext context) {
     if (_isOpen || _manuallyClosed) return const SizedBox.shrink();
 
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: widget.bottomInset,
-      child: SlideTransition(
-        position: _slideAnim,
-        child: FadeTransition(
-          opacity: _opacityAnim,
+    // bottomSheet уже располагает виджет у нижней границы, поэтому Positioned не нужен
+    return SlideTransition(
+      position: _slideAnim,
+      child: FadeTransition(
+        opacity: _opacityAnim,
+        child: SafeArea(
+          top: false,
           child: Container(
             decoration: BoxDecoration(
               color: Colors.orange.shade700,

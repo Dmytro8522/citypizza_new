@@ -9,17 +9,17 @@ class MenuItemPlaceholder extends StatelessWidget {
   final double borderRadius;
 
   const MenuItemPlaceholder({
-    Key? key,
+    super.key,
     this.width = double.infinity,
     this.height = 120,
     this.title,
     this.price,
     this.borderRadius = 12,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
-    final primary = const Color(0xFFFF9800);
+    const primary = Color(0xFFFF9800);
     return Container(
       width: width,
       height: height,

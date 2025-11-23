@@ -6,10 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:io'; // уже есть
 
-import '../widgets/common_app_bar.dart';
 import '../utils/globals.dart';
 import '../services/auth_service.dart';
-import 'order_history_screen.dart';
 import 'settings_screen.dart';
 
 class ProfileScreenAuth extends StatelessWidget {
@@ -17,9 +15,9 @@ class ProfileScreenAuth extends StatelessWidget {
   final VoidCallback onLogout;
 
   const ProfileScreenAuth({
-    Key? key,
+    super.key,
     required this.onLogout,
-  }) : super(key: key);
+  });
 
   Future<void> _signOut(BuildContext context) async {
     await AuthService.signOut();
@@ -164,10 +162,10 @@ class ProfileScreenAuth extends StatelessWidget {
                   bottom: MediaQuery.of(context).padding.bottom +
                       kBottomNavigationBarHeight)),
           children: [
-            CircleAvatar(
+            const CircleAvatar(
               radius: 40,
               backgroundColor: Colors.white12,
-              child: const Icon(
+              child: Icon(
                 Icons.person,
                 size: 48,
                 color: Colors.white54,

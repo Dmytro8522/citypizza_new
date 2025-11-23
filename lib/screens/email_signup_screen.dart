@@ -6,7 +6,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 
 import '../services/auth_service.dart';
-import 'email_login_screen.dart';
 import 'home_screen.dart';
 
 class EmailSignupScreen extends StatefulWidget {
@@ -18,14 +17,14 @@ class EmailSignupScreen extends StatefulWidget {
   final String? initialPostal;
 
   const EmailSignupScreen({
-    Key? key,
+    super.key,
     this.initialName,
     this.initialPhone,
     this.initialCity,
     this.initialStreet,
     this.initialHouseNumber,
     this.initialPostal,
-  }) : super(key: key);
+  });
 
   @override
   State<EmailSignupScreen> createState() => _EmailSignupScreenState();

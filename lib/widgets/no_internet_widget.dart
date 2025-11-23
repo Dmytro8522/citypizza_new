@@ -4,7 +4,7 @@ class NoInternetWidget extends StatelessWidget {
   final VoidCallback onRetry;
   final String? errorText;
 
-  const NoInternetWidget({Key? key, required this.onRetry, this.errorText}) : super(key: key);
+  const NoInternetWidget({super.key, required this.onRetry, this.errorText});
 
   @override
   Widget build(BuildContext context) {
