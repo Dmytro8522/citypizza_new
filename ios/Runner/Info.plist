@@ -46,13 +46,11 @@
 		<true/>
 	</dict>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Для определения вашего местоположения при заказе доставки.</string>
+	<string>Um Ihren Standort für Lieferungen zu bestimmen.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>Для определения вашего местоположения при заказе доставки.</string>
+	<string>Um Ihren Standort für Lieferungen zu bestimmen.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Для определения вашего местоположения при заказе доставки.</string>
-	<key>NSUserTrackingUsageDescription</key>
-	<string>Для улучшения персонализации и аналитики.</string>
+	<string>Um Ihren Standort für Lieferungen zu bestimmen.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>

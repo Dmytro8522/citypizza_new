@@ -245,35 +245,26 @@ class _EmailSignupScreenState extends State<EmailSignupScreen> {
                 TextFormField(
                   controller: _cityController,
                   style: const TextStyle(color: Colors.white),
-                  decoration: _inputDecoration('Stadt'),
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? 'Stadt ist erforderlich' : null,
+                  decoration: _inputDecoration('Stadt (optional, für Lieferung)'),
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _streetController,
                   style: const TextStyle(color: Colors.white),
-                  decoration: _inputDecoration('Straße'),
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? 'Straße ist erforderlich' : null,
+                  decoration: _inputDecoration('Straße (optional, für Lieferung)'),
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _houseNumberController,
                   style: const TextStyle(color: Colors.white),
-                  decoration: _inputDecoration('Hausnummer'),
-                  validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'Hausnummer ist erforderlich'
-                      : null,
+                  decoration: _inputDecoration('Hausnummer (optional)'),
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _postalController,
                   style: const TextStyle(color: Colors.white),
-                  decoration: _inputDecoration('Postleitzahl'),
+                  decoration: _inputDecoration('Postleitzahl (optional, für Lieferung)'),
                   keyboardType: TextInputType.number,
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? 'PLZ ist erforderlich' : null,
                 ),
 
                 const SizedBox(height: 32),

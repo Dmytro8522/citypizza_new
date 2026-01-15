@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/gestures.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/consent_service.dart';
 // Теперь импортим весь скелет приложения с нижним меню:
 import '../widgets/main_scaffold.dart';
@@ -16,8 +17,7 @@ class CookieSettingsScreen extends StatefulWidget {
 }
 
 class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
-  bool _analyse = false;
-  bool _personalisation = false;
+  static const _privacyUrl = 'https://dmytro8522.github.io/citypizza-legal/index.html';
 
   @override
   void initState() {
@@ -26,23 +26,16 @@ class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
   }
 
   Future<void> _loadCurrentPreferences() async {
-    final a = await ConsentService.hasConsent(CookieType.analyse);
-    final p = await ConsentService.hasConsent(CookieType.personalisation);
-    setState(() {
-      _analyse = a;
-      _personalisation = p;
-    });
+    // Исторические значения нам больше не нужны, но оставляем вызов, чтобы не ломать поток
+    await ConsentService.hasConsent(CookieType.analyse);
+    await ConsentService.hasConsent(CookieType.personalisation);
   }
 
   Future<void> _saveAndContinue({required bool acceptAll}) async {
     await ConsentService.agreeCookies();
-    if (acceptAll) {
-      await ConsentService.setConsent(CookieType.analyse, true);
-      await ConsentService.setConsent(CookieType.personalisation, true);
-    } else {
-      await ConsentService.setConsent(CookieType.analyse, false);
-      await ConsentService.setConsent(CookieType.personalisation, false);
-    }
+    // Мы не используем веб-куки: сохраняем факт информирования и продолжаем
+    await ConsentService.setConsent(CookieType.analyse, false);
+    await ConsentService.setConsent(CookieType.personalisation, false);
     // Очищаем весь стек и открываем MainScaffold:
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const MainScaffold()),
@@ -50,37 +43,11 @@ class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
     );
   }
 
-  void _showCookiePolicy() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: Colors.black87,
-        title: Text(
-          'Cookie-Richtlinie',
-          style: GoogleFonts.poppins(
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        content: SingleChildScrollView(
-          child: Text(
-            'Hier steht der vollständige Text Ihrer Cookie-Richtlinie. '
-            'Er informiert die Nutzer darüber, welche Arten von Cookies '
-            'verwendet werden und zu welchem Zweck.',
-            style: GoogleFonts.poppins(color: Colors.white70),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(
-              'Schließen',
-              style: GoogleFonts.poppins(color: Colors.orange),
-            ),
-          )
-        ],
-      ),
-    );
+  Future<void> _openPrivacy() async {
+    final uri = Uri.parse(_privacyUrl);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   @override
@@ -109,7 +76,7 @@ class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
               SizedBox(height: vh(24)),
               Center(
                 child: Icon(
-                  Icons.cookie,
+                  Icons.privacy_tip,
                   size: vw(80),
                   color: Colors.orange,
                 ),
@@ -117,7 +84,7 @@ class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
               SizedBox(height: vh(24)),
               Center(
                 child: Text(
-                  'Cookie-Einstellungen',
+                  'Datenschutz & Mitteilungen',
                   style: GoogleFonts.fredokaOne(
                     fontSize: 28,
                     color: Colors.white,
@@ -126,61 +93,41 @@ class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
               ),
               SizedBox(height: vh(12)),
               Text(
-                'Wir verwenden Cookies und Technologien für:',
+                'Wir setzen keine Web-Cookies. App speichert lokal nur Sitzungs- und Push-Tokens, die für Anmeldung und Benachrichtigungen nötig sind.',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.poppins(
                     color: Colors.white70, fontSize: 14),
               ),
-              SizedBox(height: vh(24)),
-              SwitchListTile(
-                title: Text(
-                  'Analyse-Cookies aktivieren',
-                  style: GoogleFonts.poppins(color: Colors.white),
-                ),
-                subtitle: Text(
-                  'Verbessert die App durch Nutzungsstatistiken.',
-                  style: GoogleFonts.poppins(
-                      color: Colors.white54, fontSize: 12),
-                ),
-                value: _analyse,
-                onChanged: (v) => setState(() => _analyse = v),
-                activeColor: Colors.orange,
-                inactiveTrackColor: Colors.white24,
-                contentPadding: EdgeInsets.zero,
+              SizedBox(height: vh(16)),
+              Text(
+                'Benachrichtigungen: wir senden Pushs nur, если вы их разрешили в системе. Звук/баннеры можно менять в настройках устройства.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                    color: Colors.white70, fontSize: 13),
               ),
-              SwitchListTile(
-                title: Text(
-                  'Personalisierung aktivieren',
-                  style: GoogleFonts.poppins(color: Colors.white),
-                ),
-                subtitle: Text(
-                  'Spezielle Angebote und Geburtstags-Rabatte.',
-                  style: GoogleFonts.poppins(
-                      color: Colors.white54, fontSize: 12),
-                ),
-                value: _personalisation,
-                onChanged: (v) =>
-                    setState(() => _personalisation = v),
-                activeColor: Colors.orange,
-                inactiveTrackColor: Colors.white24,
-                contentPadding: EdgeInsets.zero,
+              SizedBox(height: vh(12)),
+              Text(
+                'Mehr Details findest du in unserer Datenschutzerklärung.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                    color: Colors.white70, fontSize: 13),
               ),
               const Spacer(),
               Center(
                 child: Text.rich(
                   TextSpan(
-                    text: 'Weitere Details in unserer ',
+                    text: 'Datenschutzerklärung lesen: ',
                     style: GoogleFonts.poppins(
                         color: Colors.white70, fontSize: 12),
                     children: [
                       TextSpan(
-                        text: 'Cookie-Richtlinie',
+                        text: 'privacy policy',
                         style: const TextStyle(
                           color: Colors.orange,
                           decoration: TextDecoration.underline,
                         ),
                         recognizer: TapGestureRecognizer()
-                          ..onTap = _showCookiePolicy,
+                          ..onTap = _openPrivacy,
                       ),
                       const TextSpan(text: '.'),
                     ],
@@ -199,7 +146,7 @@ class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
                   ),
                 ),
                 child: Text(
-                  'Alle Cookies akzeptieren',
+                  'OK, weiter',
                   style: GoogleFonts.poppins(
                       color: Colors.black, fontSize: 16),
                 ),
@@ -215,7 +162,7 @@ class _CookieSettingsScreenState extends State<CookieSettingsScreen> {
                   ),
                 ),
                 child: Text(
-                  'Nur notwendige Cookies',
+                  'Später erinnern',
                   style: GoogleFonts.poppins(
                       color: Colors.white, fontSize: 16),
                 ),

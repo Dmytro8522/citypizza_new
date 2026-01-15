@@ -4,13 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:app_links/app_links.dart';
+import 'firebase_options.dart';
 import 'dart:io'; // Добавьте импорт для SocketException
 
 import 'services/cart_service.dart';
 import 'services/consent_service.dart';
+import 'services/discount_service.dart';
 import 'screens/email_login_screen.dart';
 import 'screens/reset_password_screen.dart';
 import 'screens/welcome_screen.dart';
@@ -22,10 +25,77 @@ import 'theme/theme_provider.dart';
 /// Фоновый хендлер для пушей, когда приложение убито или свернуто
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // Инициализируем Firebase, чтобы можно было обрабатывать сообщение
-  await Firebase.initializeApp();
-  // Если необходимо, можно обработать данные сообщения здесь.
-  // Но сами системные уведомления будут показаны автоматически,
-  // если payload содержит уведомительную часть.
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+}
+
+// Канал для Android heads-up уведомлений
+const AndroidNotificationChannel _promoChannel = AndroidNotificationChannel(
+  'promos_high', // новый канал, чтобы гарантировать звук
+  'Promotions',
+  description: 'Акции и уведомления City Pizza',
+  importance: Importance.max,
+  playSound: true,
+  enableVibration: true,
+  ledColor: Color(0xFFFF9800),
+);
+
+final FlutterLocalNotificationsPlugin _localNotifications =
+    FlutterLocalNotificationsPlugin();
+
+Future<void> _initLocalNotifications() async {
+  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const iosInit = DarwinInitializationSettings(
+    requestAlertPermission: true,
+    requestBadgePermission: true,
+    requestSoundPermission: true,
+  );
+
+  const initSettings = InitializationSettings(
+    android: androidInit,
+    iOS: iosInit,
+  );
+
+  await _localNotifications.initialize(initSettings);
+
+  await _localNotifications
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(_promoChannel);
+}
+
+Future<void> _showLocalNotification(RemoteMessage message) async {
+  final title = message.notification?.title ?? message.data['title'];
+  final body = message.notification?.body ?? message.data['body'];
+  if (title == null && body == null) return;
+
+  final androidDetails = AndroidNotificationDetails(
+    _promoChannel.id,
+    _promoChannel.name,
+    channelDescription: _promoChannel.description,
+    importance: Importance.max,
+    priority: Priority.high,
+    playSound: true,
+    enableVibration: true,
+    sound: const RawResourceAndroidNotificationSound('default'),
+    icon: '@mipmap/ic_launcher',
+  );
+
+  const iosDetails = DarwinNotificationDetails(
+    presentAlert: true,
+    presentSound: true,
+    presentBadge: true,
+    interruptionLevel: InterruptionLevel.timeSensitive,
+    sound: 'default',
+  );
+
+  await _localNotifications.show(
+    DateTime.now().millisecondsSinceEpoch.remainder(100000),
+    title ?? '',
+    body ?? '',
+    NotificationDetails(android: androidDetails, iOS: iosDetails),
+  );
 }
 
 void main() async {
@@ -34,9 +104,11 @@ void main() async {
   // 1) Инициализируем Firebase
   // Исправление: используем DefaultFirebaseOptions для корректной инициализации на Android и iOS
   await Firebase.initializeApp(
-    // импортируйте и используйте DefaultFirebaseOptions, если файл сгенерирован
-    // options: DefaultFirebaseOptions.currentPlatform,
+    options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  // Инициализируем локальные уведомления для баннеров в foreground
+  await _initLocalNotifications();
 
   // 2) Фиксируем ориентацию экрана портретом
   await SystemChrome.setPreferredOrientations([
@@ -63,34 +135,35 @@ void main() async {
   );
   debugPrint('🔔 Push permission status: ${settings.authorizationStatus}');
 
+  // Показываем баннеры даже в foreground на iOS
+  await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+    alert: true,
+    badge: true,
+    sound: true,
+  );
+
+  // Подпишем все устройства на общий топик акций
+  try {
+    await FirebaseMessaging.instance.subscribeToTopic('promotions');
+    debugPrint('📨 Subscribed to promotions topic');
+  } catch (e) {
+    debugPrint('⚠️ Failed to subscribe to promotions topic: $e');
+  }
+
   // 5) Настройка Firebase Messaging
   // 5.1) Регистрируем фоновый хендлер
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   // 5.2) Подписываемся на события, когда приложение в foreground
   FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-    // Для heads-up уведомлений на Android и iOS:
-    // 1. Убедитесь, что пуш приходит с payload, где есть notification (title/body).
-    // 2. Для foreground-режима на Android heads-up работает только если notification.channelId совпадает с созданным каналом и importance=max.
-    // 3. Для iOS foreground heads-up работает только если presentAlert=true и interruptionLevel=critical (и пользователь разрешил критические уведомления).
+    // Обновляем скидки на лету при получении пуша
+    triggerPromotionRefresh();
+    await _showLocalNotification(message);
+  });
 
-    // Для теста: покажем диалог в приложении при получении пуша (чтобы убедиться, что пуш реально доходит)
-    if (message.notification != null) {
-      showDialog(
-        context: _MyAppState.navigatorKey.currentContext!,
-        builder: (context) => AlertDialog(
-          title: Text(message.notification!.title ?? 'Push'),
-          content: Text(message.notification!.body ?? ''),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    }
-    // ...если хотите, можно добавить debugPrint(message.data.toString());
+  // 5.3) Когда пользователь открывает пуш из бэкграунда/килла
+  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
+    triggerPromotionRefresh();
   });
 
   // 6) Определяем начальную страницу, опрашивая согласия пользователя
@@ -146,7 +219,12 @@ class _MyAppState extends State<MyApp> {
   }
 
   void _listenTokenRefresh() {
-    FirebaseMessaging.instance.onTokenRefresh.listen(_upsertFcmToken);
+    FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
+      final user = _supabase.auth.currentUser;
+      debugPrint('🛰️ FCM token refreshed (guest allowed): $token');
+      if (user == null) return; // не сохраняем токен для неавторизованных
+      await _upsertFcmToken(token);
+    });
   }
 
   void _initAppLinks() async {
@@ -179,7 +257,6 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _saveFcmToken() async {
     final user = _supabase.auth.currentUser;
-    if (user == null) return;
     // На iOS нужно дождаться APNs-токена, иначе getToken кидает apns-token-not-set
     if (Platform.isIOS) {
       // Ждём появления APNs токена с таймаутом
@@ -195,7 +272,13 @@ class _MyAppState extends State<MyApp> {
       }
     }
     final token = await FirebaseMessaging.instance.getToken();
-    if (token != null) {
+    if (token == null) return;
+
+    // Всегда логируем токен, чтобы гость тоже мог получать пуши по топику или прямому токену
+    debugPrint('🛰️ FCM token (guest allowed): $token');
+
+    // В базу пишем только для авторизованных
+    if (user != null) {
       await _upsertFcmToken(token);
       debugPrint('✅ FCM token saved on init');
     }

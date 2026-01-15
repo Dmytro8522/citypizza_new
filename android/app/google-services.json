@@ -7,6 +7,44 @@
   "client": [
     {
       "client_info": {
+        "mobilesdk_app_id": "1:900205557601:android:c61fc56d745d4e80ccf720",
+        "android_client_info": {
+          "package_name": "com.citypizza.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCeOe5S74_u75lrhlrVglC6ZIe6pu5WkpA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:900205557601:android:a8fba067a46b05c7ccf720",
+        "android_client_info": {
+          "package_name": "com.citypizza.order"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCeOe5S74_u75lrhlrVglC6ZIe6pu5WkpA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:900205557601:android:d946603c2fb62121ccf720",
         "android_client_info": {
           "package_name": "com.example.citypizza_app"

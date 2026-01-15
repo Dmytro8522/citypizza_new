@@ -40,6 +40,46 @@ post_install do |installer|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
       config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '12.0'
+      config.build_settings['CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]'] = 'NO'
+      config.build_settings['CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]'] = 'NO'
+      config.build_settings['CODE_SIGNING_IDENTITY[sdk=iphonesimulator*]'] = ''
+    end
+  end
+
+  # Add a build phase to the app target that injects a minimal privacy manifest
+  # into third-party frameworks that require it (e.g. flutter_local_notifications).
+  # This ensures Xcode sees a privacy manifest inside the SDK bundle during
+  # Archive/Export so App Store Connect no longer reports ITMS-91061.
+  installer.aggregate_targets.each do |aggregate_target|
+    aggregate_target.user_project.targets.each do |user_target|
+      # target name in a Flutter project is usually 'Runner'
+      if user_target.name == 'Runner'
+        # avoid adding the phase multiple times
+        next if user_target.shell_script_build_phases.any? { |p| p.name == 'Inject Privacy Manifests' }
+
+        phase = user_target.new_shell_script_build_phase('Inject Privacy Manifests')
+        # Call the repository script which injects manifests for multiple known SDKs.
+        phase.shell_script = "bash \"${PODS_ROOT}/../scripts/inject_privacy_manifests.sh\" \"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}\""
+      end
+    end
+  end
+
+  # Ensure existing plugin privacy info (xcprivacy) is explicitly added
+  # to the flutter_local_notifications target resources if present in pub-cache.
+  installer.pods_project.targets.each do |t|
+    if t.name == 'flutter_local_notifications'
+      # Keep existing resources if any
+      t.resources_build_phase.files.each do |f|
+        # just keep resources
+      end
+      # add xcprivacy explicitly
+      xcprivacy = File.join(File.dirname(__FILE__),
+        '../.symlinks/plugins/flutter_local_notifications/ios/flutter_local_notifications/Sources/flutter_local_notifications/PrivacyInfo.xcprivacy')
+      if File.exist?(xcprivacy)
+        file_ref = installer.pods_project.new_file(xcprivacy)
+        t.resources_build_phase.add_file_reference(file_ref, true)
+      end
     end
   end
 end

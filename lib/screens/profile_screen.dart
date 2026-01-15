@@ -49,9 +49,12 @@ class ProfileScreen extends StatelessWidget {
   }
 
   Widget _buildContactInfo(BuildContext context) {
-    const address = 'Leipziger Str. 21, 04420, Markranstädt';
-    const email = 'info@citypizzaservice.com';
-    const phone = '034205 83916';
+    const address = 'Härtelstraße 7, 04420 Leipzig';
+    const email = 'do84arov@gmail.com';
+    const phone = '+49 162 4514836';
+    const privacyUrl = 'https://dmytro8522.github.io/citypizza-legal/index.html';
+    const termsUrl = 'https://dmytro8522.github.io/citypizza-legal/terms.html';
+    const supportUrl = 'https://dmytro8522.github.io/citypizza-legal/support.html';
 
     return Card(
       color: Colors.white12,
@@ -135,6 +138,66 @@ class ProfileScreen extends StatelessWidget {
                   Expanded(
                     child: Text(
                       phone,
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(color: Colors.white24, height: 24),
+            InkWell(
+              onTap: () async => launchUrl(Uri.parse(privacyUrl), mode: LaunchMode.externalApplication),
+              borderRadius: BorderRadius.circular(8),
+              child: Row(
+                children: [
+                  const Icon(Icons.privacy_tip, color: Colors.orange, size: 24),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Datenschutzerklärung',
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(color: Colors.white24, height: 24),
+            InkWell(
+              onTap: () async => launchUrl(Uri.parse(termsUrl), mode: LaunchMode.externalApplication),
+              borderRadius: BorderRadius.circular(8),
+              child: Row(
+                children: [
+                  const Icon(Icons.article, color: Colors.orange, size: 24),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'AGB',
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(color: Colors.white24, height: 24),
+            InkWell(
+              onTap: () async => launchUrl(Uri.parse(supportUrl), mode: LaunchMode.externalApplication),
+              borderRadius: BorderRadius.circular(8),
+              child: Row(
+                children: [
+                  const Icon(Icons.support_agent, color: Colors.orange, size: 24),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Support',
                       style: GoogleFonts.poppins(
                         color: Colors.white,
                         fontSize: 15,

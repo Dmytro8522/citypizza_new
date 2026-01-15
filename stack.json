@@ -1,0 +1,47 @@
+{
+  "project": "citypizza_new",
+  "language": "Dart",
+  "framework": "Flutter",
+  "flutter_requirement": ">=3.16.0",
+  "dart_requirement": ">=3.0.0 <4.0.0",
+  "platforms": ["android", "ios"],
+  "android": {
+    "minSdk": 21,
+    "compileSdk": "from Flutter (flutter.compileSdkVersion)",
+    "javaVersion": "11",
+    "gradleDsl": "Kotlin DSL (build.gradle.kts)",
+    "keystore_path": "android/app/release.keystore",
+    "keystore_properties": "android/keystore.properties"
+  },
+  "ios": {
+    "deployment_target": "12.0",
+    "cocoapods": true
+  },
+  "packages": {
+    "firebase_core": "^2.24.2",
+    "firebase_messaging": "^14.7.8",
+    "flutter_local_notifications": "16.0.0",
+    "supabase_flutter": "^2.3.4",
+    "shared_preferences": "^2.2.2",
+    "google_fonts": "^4.0.3",
+    "geolocator": "^10.1.1",
+    "geocoding": "^2.1.1",
+    "http": "^0.13.6",
+    "url_launcher": "^6.2.5",
+    "lottie": "^2.4.0",
+    "video_player": "^2.8.3"
+  },
+  "backend": {
+    "primary": "Supabase (Postgres + Auth + Edge Functions)",
+    "notifications": "Firebase Cloud Messaging (FCM)"
+  },
+  "build_commands": {
+    "android_aab": "flutter build appbundle --release",
+    "android_apk": "flutter build apk --release",
+    "ios_ipa": "flutter build ipa --release"
+  },
+  "notes": {
+    "local_patch": "Local patch applied to flutter_local_notifications in pub-cache to avoid bigLargeIcon ambiguity during compilation. Consider reproducible override in repo for CI.",
+    "keystore_security": "Do not commit keystore or keystore.properties; keep in secure storage."
+  }
+}

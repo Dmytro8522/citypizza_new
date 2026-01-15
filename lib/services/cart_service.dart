@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'delivery_mode_prompt.dart';
+
 /// Модель одного пункта в корзине
 class CartItem {
   final int itemId;
@@ -211,6 +213,7 @@ class CartService {
     _items.add(item);
     cartCountNotifier.value = _items.length;
     await _save();
+    await DeliveryModePrompt.ensureModeSelected();
   }
 
   /// Удалить ровно одну копию указанного CartItem

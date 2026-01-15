@@ -99,4 +99,24 @@ class AuthService {
       'postal_code': postalCode,
     });
   }
+
+  /// Удалить аккаунт через Edge Function delete_user (требует сервисную роль на сервере)
+  static Future<void> deleteAccount() async {
+    final user = currentUser;
+    if (user == null) throw Exception('Not authenticated');
+    try {
+      final res = await _supabase.functions.invoke(
+        'delete_user',
+        body: {'user_id': user.id},
+      );
+      if (res.status >= 400) {
+        throw Exception('Failed with status ${res.status}: ${res.data}');
+      }
+      // На всякий случай чистим сессию
+      await _supabase.auth.signOut();
+    } catch (e) {
+      debugPrint('❌ AuthService deleteAccount error: $e');
+      rethrow;
+    }
+  }
 }

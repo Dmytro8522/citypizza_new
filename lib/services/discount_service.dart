@@ -2,6 +2,10 @@ import 'dart:math' as math;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/material.dart';
 
+// Notifier to signal UI that promotions should refresh when a push arrives
+final ValueNotifier<int> promotionRefreshNotifier = ValueNotifier<int>(0);
+void triggerPromotionRefresh() => promotionRefreshNotifier.value++;
+
 class DiscountResult {
   final double total;
   final double totalDiscount;

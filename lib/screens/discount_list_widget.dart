@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -38,6 +39,7 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
   Timer? _autoScrollTimer;
   List<Promotion> _promotions = [];
   bool _loading = true;
+  int _overflowLogCount = 0;
 
   // пульс-эффект для рамки
   late final AnimationController _pulseCtrl;
@@ -71,6 +73,7 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
           Timer.periodic(_autoScrollInterval, (_) => _nextPage());
     });
 
+    promotionRefreshNotifier.addListener(_fetchPromotions);
     _fetchPromotions();
   }
 
@@ -112,6 +115,7 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
 
   @override
   void dispose() {
+    promotionRefreshNotifier.removeListener(_fetchPromotions);
     _autoScrollTimer?.cancel();
     _pageCtrl.dispose();
     _pulseCtrl.dispose();
@@ -168,6 +172,163 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
     return _isDiscountReduction(promo) ? '-$base' : base;
   }
 
+  int _computeDescMaxLines({
+    required BoxConstraints constraints,
+    required String title,
+    required String headlineValue,
+    required String period,
+    required bool hasDescription,
+    required int cardIndex,
+    required int descLength,
+  }) {
+    const horizontalPadding = 24.0; // 12 px on each side in the card
+    const spacingAfterTitle = 4.0;
+    const spacingAfterHeadline = 6.0;
+    final spacingBeforePeriod = hasDescription ? 6.0 : 0.0;
+
+    final titleStyle = GoogleFonts.fredokaOne(color: Colors.white, fontSize: 17);
+    final headlineStyle = GoogleFonts.fredokaOne(
+      fontSize: 22,
+      fontWeight: FontWeight.bold,
+      color: Colors.white,
+    );
+    final periodStyle = GoogleFonts.poppins(color: Colors.white54, fontSize: 11);
+    final descStyle = GoogleFonts.poppins(color: Colors.white70, fontSize: 13);
+
+    // Approximate widths: remove horizontal padding and a compact info icon area (~28 px)
+    final usableTitleWidth = constraints.maxWidth - horizontalPadding - 28;
+    final usableBodyWidth = constraints.maxWidth - horizontalPadding;
+
+    final titlePainter = TextPainter(
+      text: TextSpan(text: title, style: titleStyle),
+      maxLines: 3,
+      ellipsis: '...',
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: usableTitleWidth);
+
+    final headlinePainter = TextPainter(
+      text: TextSpan(text: headlineValue, style: headlineStyle),
+      maxLines: 1,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: usableBodyWidth);
+
+    final periodPainter = TextPainter(
+      text: TextSpan(text: period, style: periodStyle),
+      maxLines: 1,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: usableBodyWidth);
+
+    final descLinePainter = TextPainter(
+      text: TextSpan(text: 'A', style: descStyle),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    const verticalPadding = 24.0; // top + bottom padding inside the card
+    final effectiveHeight = constraints.maxHeight; // фактическая высота доступного контейнера
+    final usedHeight = titlePainter.height +
+      spacingAfterTitle +
+      headlinePainter.height +
+      spacingAfterHeadline +
+      spacingBeforePeriod +
+      periodPainter.height +
+      verticalPadding;
+
+    final remaining = effectiveHeight - usedHeight;
+    if (remaining <= 0) {
+      _logOverflow(
+        reason: 'no space after period',
+        constraints: constraints,
+        remaining: remaining,
+        titleHeight: titlePainter.height,
+        headlineHeight: headlinePainter.height,
+        periodHeight: periodPainter.height,
+        lineHeight: descLinePainter.preferredLineHeight,
+        cardIndex: cardIndex,
+        descLength: descLength,
+        maxLinesCandidate: 0,
+      );
+      return 0;
+    }
+
+    // Показываем описание только если помещается хотя бы одна полная строка
+    final oneLine = descLinePainter.preferredLineHeight;
+    if (remaining < oneLine) {
+      _logOverflow(
+        reason: 'space less than one line',
+        constraints: constraints,
+        remaining: remaining,
+        titleHeight: titlePainter.height,
+        headlineHeight: headlinePainter.height,
+        periodHeight: periodPainter.height,
+        lineHeight: oneLine,
+        cardIndex: cardIndex,
+        descLength: descLength,
+        maxLinesCandidate: 0,
+      );
+      return 0;
+    }
+
+    final possibleLines = (remaining / oneLine).floor();
+    final capped = math.max(0, math.min(2, possibleLines));
+    _logMetrics(
+      constraints: constraints,
+      remaining: remaining,
+      titleHeight: titlePainter.height,
+      headlineHeight: headlinePainter.height,
+      periodHeight: periodPainter.height,
+      lineHeight: oneLine,
+      maxLines: capped,
+      cardIndex: cardIndex,
+      descLength: descLength,
+    );
+    return capped;
+  }
+
+  void _logOverflow({
+    required String reason,
+    required BoxConstraints constraints,
+    required double remaining,
+    required double titleHeight,
+    required double headlineHeight,
+    required double periodHeight,
+    required double lineHeight,
+    required int cardIndex,
+    required int descLength,
+    required int maxLinesCandidate,
+  }) {
+    if (_overflowLogCount >= 8) return; // ограничиваем шум
+    _overflowLogCount++;
+    debugPrint(
+      '📏 discount card overflow [$cardIndex] ($reason): rem=${remaining.toStringAsFixed(2)}, '
+      'cw=${constraints.maxWidth.toStringAsFixed(1)}, ch=${constraints.maxHeight.toStringAsFixed(1)}, '
+      'title=${titleHeight.toStringAsFixed(2)}, head=${headlineHeight.toStringAsFixed(2)}, '
+      'period=${periodHeight.toStringAsFixed(2)}, line=${lineHeight.toStringAsFixed(2)}, '
+      'descLen=$descLength, maxLines=$maxLinesCandidate',
+    );
+  }
+
+  void _logMetrics({
+    required BoxConstraints constraints,
+    required double remaining,
+    required double titleHeight,
+    required double headlineHeight,
+    required double periodHeight,
+    required double lineHeight,
+    required int maxLines,
+    required int cardIndex,
+    required int descLength,
+  }) {
+    if (_overflowLogCount >= 8) return; // используем тот же лимит, чтобы не шуметь
+    _overflowLogCount++;
+    debugPrint(
+      '📐 discount card metrics [$cardIndex]: rem=${remaining.toStringAsFixed(2)}, '
+      'cw=${constraints.maxWidth.toStringAsFixed(1)}, ch=${constraints.maxHeight.toStringAsFixed(1)}, '
+      'title=${titleHeight.toStringAsFixed(2)}, head=${headlineHeight.toStringAsFixed(2)}, '
+      'period=${periodHeight.toStringAsFixed(2)}, line=${lineHeight.toStringAsFixed(2)}, '
+      'descLen=$descLength, maxLines=$maxLines',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -208,6 +369,7 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
                 child: Container(
                   width: _cardWidth,
                   height: _cardHeight,
+                  clipBehavior: Clip.hardEdge,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
@@ -239,84 +401,111 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
                       ),
                       Padding(
                         padding: const EdgeInsets.all(12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final descMaxLines = _computeDescMaxLines(
+                              constraints: constraints,
+                              title: title,
+                              headlineValue: headlineValue,
+                              period: period,
+                              hasDescription: desc.isNotEmpty,
+                              cardIndex: idx,
+                              descLength: desc.length,
+                            );
+
+                            return Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Expanded(
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        title,
+                                        style: GoogleFonts.fredokaOne(
+                                          color: Colors.white,
+                                          fontSize: 17,
+                                        ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    IconButton(
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(),
+                                      icon: const Icon(
+                                        Icons.info_outline,
+                                        size: 20,
+                                        color: Colors.white70,
+                                      ),
+                                      onPressed: () => _showDetail(context, promo),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                // ——— динамический градиент для цифры скидки ———
+                                AnimatedBuilder(
+                                  animation: _gradAnim,
+                                  builder: (context, child) {
+                                    final t = _gradAnim.value;
+                                    final begin = Alignment(-1.0 + 2 * t, 0);
+                                    final end   = Alignment(1.0 - 2 * t, 0);
+                                    return ShaderMask(
+                                      blendMode: BlendMode.srcIn,
+                                      shaderCallback: (bounds) {
+                                        return LinearGradient(
+                                          begin: begin,
+                                          end: end,
+                                          colors: const [
+                                            Colors.yellowAccent,
+                                            Colors.orangeAccent,
+                                            Colors.redAccent,
+                                          ],
+                                        ).createShader(bounds);
+                                      },
+                                      child: child,
+                                    );
+                                  },
                                   child: Text(
-                                    title,
+                                    headlineValue,
                                     style: GoogleFonts.fredokaOne(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.bold,
                                       color: Colors.white,
-                                      fontSize: 18,
                                     ),
                                   ),
                                 ),
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.info_outline,
-                                    size: 20,
-                                    color: Colors.white70,
+                                const SizedBox(height: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      if (desc.isNotEmpty && descMaxLines > 0)
+                                        Text(
+                                          desc,
+                                          style: GoogleFonts.poppins(
+                                            color: Colors.white70,
+                                            fontSize: 13,
+                                          ),
+                                          maxLines: descMaxLines,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      if (desc.isNotEmpty && descMaxLines > 0)
+                                        const SizedBox(height: 6),
+                                      const Spacer(),
+                                      Text(
+                                        period,
+                                        style: GoogleFonts.poppins(
+                                          color: Colors.white54,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  onPressed: () => _showDetail(context, promo),
                                 ),
                               ],
-                            ),
-                            const SizedBox(height: 4),
-                            // ——— динамический градиент для цифры скидки ———
-                            AnimatedBuilder(
-                              animation: _gradAnim,
-                              builder: (context, child) {
-                                final t = _gradAnim.value;
-                                final begin = Alignment(-1.0 + 2 * t, 0);
-                                final end   = Alignment(1.0 - 2 * t, 0);
-                                return ShaderMask(
-                                  blendMode: BlendMode.srcIn,
-                                  shaderCallback: (bounds) {
-                                    return LinearGradient(
-                                      begin: begin,
-                                      end: end,
-                                      colors: const [
-                                        Colors.yellowAccent,
-                                        Colors.orangeAccent,
-                                        Colors.redAccent,
-                                      ],
-                                    ).createShader(bounds);
-                                  },
-                                  child: child,
-                                );
-                              },
-                              child: Text(
-                                headlineValue,
-                                style: GoogleFonts.fredokaOne(
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                            const Spacer(),
-                            if (desc.isNotEmpty)
-                              Text(
-                                desc,
-                                style: GoogleFonts.poppins(
-                                  color: Colors.white70,
-                                  fontSize: 13,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            const SizedBox(height: 6),
-                            Text(
-                              period,
-                              style: GoogleFonts.poppins(
-                                color: Colors.white54,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
+                            );
+                          },
                         ),
                       ),
                     ],
