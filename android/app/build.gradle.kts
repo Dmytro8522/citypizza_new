@@ -9,7 +9,8 @@ plugins {
 }
 
 val keystoreProperties = Properties()
-val keystorePropertiesFile = rootProject.file("android/keystore.properties")
+// rootProject указывает на каталог android/, поэтому путь без дополнительного "android/"
+val keystorePropertiesFile = rootProject.file("keystore.properties")
 val hasKeystore = keystorePropertiesFile.exists()
 if (hasKeystore) {
     keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
@@ -63,6 +64,6 @@ flutter {
 
 dependencies {
     // ...existing code...
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     // ...existing code...
 }
