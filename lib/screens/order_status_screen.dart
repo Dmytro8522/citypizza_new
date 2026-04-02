@@ -1,14 +1,18 @@
 // lib/screens/order_status_screen.dart
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../theme/theme_provider.dart';
 import '../services/app_config_service.dart' as cfg;
+import '../services/restaurant_context.dart';
 
 class OrderStatusScreen extends StatefulWidget {
   final int orderId;
@@ -28,6 +32,10 @@ class _OrderStatusScreenState extends State<OrderStatusScreen>
   int _etaMinutes = 45; // default ETA hint
   final Map<int, String> _optionNameCache = {};
   RealtimeChannel? _channel;
+  Timer? _pollTimer;
+  final FlutterLocalNotificationsPlugin _localNotifications =
+      FlutterLocalNotificationsPlugin();
+  String? _lastStatus;
   late final AnimationController _blinkCtrl;
 
   @override
@@ -36,7 +44,33 @@ class _OrderStatusScreenState extends State<OrderStatusScreen>
     _blinkCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 1000));
     _blinkCtrl.repeat(reverse: true);
+    _initLocalNotifications();
     _init();
+  }
+
+  Future<void> _initLocalNotifications() async {
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const iosInit = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+    );
+    const initSettings = InitializationSettings(
+      android: androidInit,
+      iOS: iosInit,
+    );
+    await _localNotifications.initialize(initSettings);
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(
+          const AndroidNotificationChannel(
+            'order_status',
+            'Order Status',
+            description: 'Updates about order status',
+            importance: Importance.defaultImportance,
+          ),
+        );
   }
 
   Future<void> _init() async {
@@ -53,6 +87,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen>
           .from('orders')
           .select(
               '*, order_items(*, order_item_extras(*), order_item_options(*))')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('id', widget.orderId)
           .maybeSingle();
       // Fallback для гостя/без доступа: читаем локальный снапшот
@@ -167,20 +202,101 @@ class _OrderStatusScreenState extends State<OrderStatusScreen>
               type: PostgresChangeFilterType.eq,
               column: 'id',
               value: widget.orderId.toString()),
-          callback: (payload) async {
-            final row = await _db
-                .from('orders')
-                .select(
-                    '*, order_items(*, order_item_extras(*), order_item_options(*))')
-                .eq('id', widget.orderId)
-                .maybeSingle();
-            if (!mounted) return;
-            setState(() {
-              _order = row;
-            });
-          },
+          callback: (payload) async => _refreshOrder(),
         )
         .subscribe();
+
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 20),
+      (_) => _refreshOrder(),
+    );
+  }
+
+  Future<void> _refreshOrder() async {
+    try {
+      final row = await _db
+          .from('orders')
+          .select(
+              '*, order_items(*, order_item_extras(*), order_item_options(*))')
+          .eq('restaurant_id', RestaurantContext.current)
+          .eq('id', widget.orderId)
+          .maybeSingle();
+      final rawStatus = (row?['status'] as String?)?.trim();
+      final isDelivery = (row?['is_delivery'] as bool?) ?? true;
+      if (rawStatus != null && rawStatus.isNotEmpty) {
+        final normalized = _normalizeStatus(rawStatus);
+        if (_lastStatus == null) {
+          _lastStatus = normalized;
+        } else if (_lastStatus != normalized) {
+          _lastStatus = normalized;
+          await _showStatusNotification(rawStatus, isDelivery: isDelivery);
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _order = row;
+      });
+    } catch (_) {
+      // ignore polling errors
+    }
+  }
+
+  String _normalizeStatus(String status) => status.trim().toLowerCase();
+
+  String _statusLabel(String status, {required bool isDelivery}) {
+    final normalized = _normalizeStatus(status);
+    switch (normalized) {
+      case 'eingegangen':
+        return 'Neu';
+      case 'bestätigt':
+      case 'bestatigt':
+      case 'bestaetigt':
+        return 'Bestätigt';
+      case 'in_zubereitung':
+      case 'in-zubereitung':
+        return 'In Zubereitung';
+      case 'unterwegs':
+        return isDelivery ? 'Unterwegs' : 'Fertig';
+      case 'fertig':
+        return 'Fertig';
+      case 'storniert':
+      case 'cancelled':
+      case 'canceled':
+        return 'Storniert';
+      // legacy fallbacks
+      case 'preparing':
+        return 'In Zubereitung';
+      case 'on_the_way':
+        return isDelivery ? 'Unterwegs' : 'Fertig';
+      case 'delivered':
+        return isDelivery ? 'Zugestellt' : 'Abgeholt';
+      default:
+        return 'Neu';
+    }
+  }
+
+  Future<void> _showStatusNotification(String status,
+      {required bool isDelivery}) async {
+    final label = _statusLabel(status, isDelivery: isDelivery);
+    await _localNotifications.show(
+      widget.orderId,
+      'Bestellstatus',
+      label,
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'order_status',
+          'Order Status',
+          channelDescription: 'Updates about order status',
+          importance: Importance.defaultImportance,
+          priority: Priority.defaultPriority,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentSound: true,
+        ),
+      ),
+    );
   }
 
   @override
@@ -236,12 +352,14 @@ class _OrderStatusScreenState extends State<OrderStatusScreen>
     final scheduledStr = _order!['scheduled_time']?.toString();
     if (scheduledStr != null) {
       try {
-        eta = DateTime.parse(scheduledStr);
+        eta = DateTime.parse(scheduledStr)
+            .toLocal(); // Конвертация в локальное время
       } catch (_) {}
     }
-    eta ??= (createdAt ?? DateTime.now()).add(Duration(minutes: _etaMinutes));
+    eta ??= ((createdAt ?? DateTime.now()).add(Duration(minutes: _etaMinutes)))
+        .toLocal(); // Конвертация в локальное время
 
-    final status = (_order!['status'] as String?) ?? 'eingegangen';
+    final status = ((_order!['status'] as String?) ?? 'eingegangen').trim();
     final isDelivery = (_order!['is_delivery'] as bool?) ?? true;
     final totalSumRaw = (_order!['total_sum'] as num?)?.toDouble();
     final discount = (_order!['discount_amount'] as num?)?.toDouble() ?? 0.0;
@@ -285,6 +403,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen>
   @override
   void dispose() {
     _channel?.unsubscribe();
+    _pollTimer?.cancel();
     _blinkCtrl.dispose();
     super.dispose();
   }
@@ -311,20 +430,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen>
       {required String status,
       required DateTime? eta,
       required bool isDelivery}) {
-    String statusLabel;
-    switch (status.toLowerCase()) {
-      case 'preparing':
-        statusLabel = 'In Vorbereitung';
-        break;
-      case 'on_the_way':
-        statusLabel = isDelivery ? 'Unterwegs' : 'Bereit zur Abholung';
-        break;
-      case 'delivered':
-        statusLabel = isDelivery ? 'Zugestellt' : 'Abgeholt';
-        break;
-      default:
-        statusLabel = 'Eingegangen';
-    }
+    final statusLabel = _statusLabel(status, isDelivery: isDelivery);
     return Card(
       color: appTheme.cardColor,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -472,6 +578,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen>
       future: (() async => await _db
           .from('menu_v2_item')
           .select('name, has_sizes')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('id', mid)
           .maybeSingle())(),
       builder: (context, snap) {
@@ -483,6 +590,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen>
               ? (() async => await _db
                   .from('menu_size')
                   .select('name')
+                  .eq('restaurant_id', RestaurantContext.current)
                   .eq('id', sid)
                   .maybeSingle())()
               : Future.value(null),
@@ -566,6 +674,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen>
       final row = await _db
           .from('menu_v2_modifier_option')
           .select('name')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('id', id)
           .maybeSingle();
       final raw = (row?['name'] as String?)?.trim();
@@ -584,8 +693,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen>
         (optionRow['option_id'] as int?) ??
         (optionRow['id'] as int?) ??
         0;
-    final storedName =
-        (optionRow['option_name'] as String?)?.trim() ?? '';
+    final storedName = (optionRow['option_name'] as String?)?.trim() ?? '';
 
     Widget buildRow(String name, double effectiveDelta) {
       final showDelta = effectiveDelta.abs() > 0.0001;

@@ -1,6 +1,8 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart'; // добавляем импорт для debugPrint
 
+import 'restaurant_context.dart';
+
 class AuthService {
   static final _supabase = Supabase.instance.client;
 
@@ -27,8 +29,8 @@ class AuthService {
         'house_number': houseNumber,
         'postal_code': postalCode,
       },
-      // должен совпадать с Redirect URL в вашем Dashboard Supabase
-      emailRedirectTo: 'com.citypizza.app://login-callback',
+      // должен совпадать с Redirect URL и схемой, зарегистрированной в приложении (Info.plist)
+      emailRedirectTo: 'edspizzaservice://login-callback/',
     );
   }
 
@@ -67,6 +69,7 @@ class AuthService {
       final res = await _supabase
           .from('user_data')
           .select()
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('id', user.id)
           .maybeSingle();
       
@@ -90,6 +93,7 @@ class AuthService {
     final user = currentUser;
     if (user == null) throw Exception('Not authenticated');
     await _supabase.from('user_data').upsert({
+      'restaurant_id': RestaurantContext.current,
       'id': user.id,
       'first_name': name,
       'phone': phone,
@@ -117,6 +121,43 @@ class AuthService {
     } catch (e) {
       debugPrint('❌ AuthService deleteAccount error: $e');
       rethrow;
+    }
+  }
+
+  /// Создать профиль пользователя в таблице user_data, если его нет.
+  /// Использует restaurant_id и user_metadata из Supabase Auth.
+  static Future<void> ensureUserProfile() async {
+    final user = currentUser;
+    if (user == null) return;
+
+    try {
+      final exists = await _supabase
+          .from('user_data')
+          .select('id')
+          .eq('restaurant_id', RestaurantContext.current)
+          .eq('id', user.id)
+          .maybeSingle();
+
+      if (exists != null) {
+        debugPrint('✅ user_data already exists for ${user.id}');
+        return;
+      }
+
+      final meta = user.userMetadata ?? <String, dynamic>{};
+      await _supabase.from('user_data').upsert({
+        'restaurant_id': RestaurantContext.current,
+        'id': user.id,
+        'email': user.email,
+        'first_name': (meta['first_name'] as String?) ?? '',
+        'phone': (meta['phone'] as String?) ?? '',
+        'city': (meta['city'] as String?) ?? '',
+        'street': (meta['street'] as String?) ?? '',
+        'house_number': (meta['house_number'] as String?) ?? '',
+        'postal_code': (meta['postal_code'] as String?) ?? '',
+      });
+      debugPrint('📝 Created user_data for ${user.id}');
+    } catch (e) {
+      debugPrint('❌ ensureUserProfile error: $e');
     }
   }
 }

@@ -1,0 +1,117 @@
+{
+  "restaurantId": "8bb086be-ffff-4bbe-bb40-b78b5dd43114",
+  "branding": {
+    "name": "ED´s Pizzaservice in Waiblingen",
+    "tagline": "Willkommen bei ED´s Pizzaservice in Waiblingen - Pizza, Burger, Pasta und vieles mehr!",
+    "logo": "assets/logo.png",
+    "appIcon": "assets/icon/app_icon.png",
+    "splash": {
+      "video": "assets/onboarding.mp4",
+      "backgroundColor": "#CF181F",
+      "overlayColor": "#181818",
+      "overlayOpacity": 0.73
+    }
+  },
+  "texts": {
+    "welcome": {
+      "title": "ED´s Pizzaservice in Waiblingen",
+      "subtitle": "",
+      "cta": "Pizza, Pasta, alles was du liebst – direkt zu dir.",
+      "startButton": "Jetzt starten",
+      "legalDialogTitle": "AGB & Datenschutzerklärung",
+      "legalPrefix": "Mit dem Start akzeptierst du unsere ",
+      "legalLink": "AGB & Datenschutzerklärung",
+      "legalSuffix": "."
+    },
+    "legal": {
+      "agbTitle": "Allgemeine Geschäftsbedingungen (AGB)",
+      "privacyTitle": "Datenschutzerklärung",
+      "agbBody": "Allgemeine Geschäftsbedingungen (AGB)\n\n§1 Geltungsbereich\nDiese AGB gelten für Bestellungen über die City Pizza App, bereitgestellt von [Ihr Firmenname], [Adresse].\n\n§2 Vertragsschluss\nMit Klick auf “Jetzt starten” und Aufgabe einer Bestellung geben Sie ein verbindliches Angebot ab. Die Annahme erfolgt durch eine Bestätigungs-Push oder E-Mail.\n\n§3 Preise und Zahlung\nAlle Preise verstehen sich inkl. gesetzl. MwSt. Zahlbar via Kreditkarte, PayPal oder Bar bei Lieferung.\n\n§4 Lieferung\nLieferzeit 30–60 Min. Widerruf ist bis zur Zubereitung möglich.\n\n§5 Gewährleistung und Haftung\nEs gelten gesetzliche Mängelrechte. Eine weitergehende Haftung für leichte Fahrlässigkeit ist ausgeschlossen.\n\n§6 Datenschutz\nZur Verarbeitung Ihrer Daten siehe unsere Datenschutzerklärung.\n\n§7 Schlussbestimmungen\nEs gilt deutsches Recht. Gerichtsstand: [Ort].",
+      "privacyBody": "Datenschutzerklärung\n\n1. Verantwortliche Stelle\n[Ihr Firmenname], [Adresse], E-Mail: [kontakt@firma.de], Telefon: [01234/567890]\n\n2. Erhobene Daten\n– Bestelldaten (Name, Anschrift, Telefon)\n– Nutzungsdaten (Bestell- und Lieferhistorie)\n– Gerätedaten (OS-Version, App-Version)\n\n3. Verarbeitungszwecke\n– Vertragsabwicklung (§ 6 Abs. 1 b DSGVO)\n– Verbesserung des Angebots\n– Direktmarketing nur nach gesonderter Einwilligung\n\n4. Weitergabe an Dritte\n– Zahlungsdienstleister (z. B. PayPal)\n– Lieferpartner (z. B. Pizza Taxi)\n– Steuerberater/Finanzamt (gesetzliche Aufbewahrungspflichten)\n\n5. Speicherdauer\n– Rechnungen: 10 Jahre\n– Bestelldaten: 3 Jahre\n\n6. Betroffenenrechte\nAuskunft, Berichtigung, Löschung, Einschränkung, Datenübertragbarkeit, Widerspruch.\nKontakt: [datenschutz@firma.de]\n\nStand: [TT.MM.JJJJ]"
+    },
+    "cookie": {
+      "title": "Datenschutz & Mitteilungen",
+      "description1": "Wir setzen keine Web-Cookies. App speichert lokal nur Sitzungs- und Push-Tokens, die für Anmeldung und Benachrichtigungen nötig sind.",
+      "description2": "Benachrichtigungen: wir senden Pushs nur, wenn Sie es in der Systemkonfiguration erlauben. Ton/Banner lassen sich in den Geräteeinstellungen anpassen.",
+      "description3": "Mehr Details findest du in unserer Datenschutzerklärung.",
+      "privacyPrefix": "Datenschutzerklärung lesen: ",
+      "privacyLink": "privacy policy",
+      "privacySuffix": ".",
+      "primaryButton": "OK, weiter",
+      "secondaryButton": "Später erinnern"
+    },
+    "bottomNav": {
+      "home": "Home",
+      "menu": "Menü",
+      "profile": "Profil"
+    },
+    "appBarTitles": {
+      "home": "ED´s Pizzaservice",
+      "menu": "Menü",
+      "profile": "Profil"
+    },
+    "common": {
+      "close": "Schließen"
+    }
+  },
+  "theme": {
+    "primary": "#F07523",
+    "secondary": "#FFB74D",
+    "background": "#111111",
+    "surface": "#1C1C1C",
+    "card": "#1E1E1E",
+    "textPrimary": "#FFFFFF",
+    "textSecondary": "#B3B3B3",
+    "buttonBackground": "#F07523",
+    "buttonText": "#FFFFFF",
+    "border": "#3A3A3A",
+    "shadow": "#000000",
+    "icon": "#FFFFFF",
+    "appBarBackground": "#111111",
+    "appBarTitleColor": "#F07523",
+    "appBarIconColor": "#FFFFFF"
+  },
+  "fonts": {
+    "primary": "Poppins",
+    "secondary": "Fredoka One",
+    "weights": {
+      "regular": 400,
+      "medium": 500,
+      "bold": 700
+    }
+  },
+  "contact": {
+    "address": "Max-Eyth-Str. 9, 71332 Waiblingen",
+    "email": "food_palast@yahoo.de",
+    "phone": "07151-5023666",
+    "links": {
+      "datenschutz": "https://dmytro8522.github.io/citypizza-legal/index.html",
+      "agb": "https://dmytro8522.github.io/citypizza-legal/index.html",
+      "support": "https://dmytro8522.github.io/citypizza-legal/index.html"
+    }
+  },
+  "business": {
+    "legalName": "ED´s Pizzaservice in Waiblingen",
+    "region": "Waiblingen",
+    "currency": "EUR",
+    "language": "de"
+  },
+  "media": {
+    "onboardingImages": [],
+    "promoBanners": [],
+    "backgrounds": {
+      "home": "",
+      "menu": ""
+    }
+  },
+  "features": {
+    "enablePickup": true,
+    "enableDelivery": true,
+    "enablePush": true,
+    "enableUpsell": true
+  },
+  "appSettings": {
+    "current_order_widget_minutes": 60,
+    "default_eta_minutes": 45
+  }
+}

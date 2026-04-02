@@ -15,13 +15,19 @@ import '../theme/theme_provider.dart';
 import '../widgets/price_with_promotion.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/delivery_zone_service.dart';
+import '../services/restaurant_context.dart';
+import '../services/menu_visibility_service.dart';
 
 class _ExtraInfo {
   final int id;
   final String name;
   final double price;
   final int quantity;
-  _ExtraInfo({required this.id, required this.name, required this.price, required this.quantity});
+  _ExtraInfo(
+      {required this.id,
+      required this.name,
+      required this.price,
+      required this.quantity});
 }
 
 class _OptionInfo {
@@ -29,7 +35,11 @@ class _OptionInfo {
   final String name;
   final double priceDelta;
   final int quantity;
-  _OptionInfo({required this.id, required this.name, required this.priceDelta, required this.quantity});
+  _OptionInfo(
+      {required this.id,
+      required this.name,
+      required this.priceDelta,
+      required this.quantity});
 }
 
 class CartScreen extends StatefulWidget {
@@ -61,13 +71,17 @@ class _CartScreenState extends State<CartScreen>
   bool _computingMinOrder = false;
   bool _isDeliveryMode = false;
 
-  bool get _showMinOrderBar => _isDeliveryMode && _minOrderAmount != null && _totalSum + 0.0001 < _minOrderAmount!;
+  bool get _showMinOrderBar =>
+      _isDeliveryMode &&
+      _minOrderAmount != null &&
+      _totalSum + 0.0001 < _minOrderAmount!;
 
   @override
   void initState() {
     super.initState();
     CartService.init().then((_) async {
-  await _loadUserData(); // currently only loads userId; birthdate no longer needed for promotions
+      await _sanitizeHiddenEntitiesInCart();
+      await _loadUserData(); // currently only loads userId; birthdate no longer needed for promotions
       await _recalculateTotal();
       await _initMinOrderContext();
     });
@@ -100,7 +114,8 @@ class _CartScreenState extends State<CartScreen>
     final postal = prefs.getString('user_postal_code');
     if (postal == null || postal.isEmpty) return;
     setState(() => _computingMinOrder = true);
-    final mo = await DeliveryZoneService.getMinOrderForPostal(postalCode: postal);
+    final mo =
+        await DeliveryZoneService.getMinOrderForPostal(postalCode: postal);
     if (!mounted) return;
     setState(() {
       _minOrderAmount = mo;
@@ -112,19 +127,40 @@ class _CartScreenState extends State<CartScreen>
     final user = Supabase.instance.client.auth.currentUser;
     _userId = user?.id;
     if (_userId == null) return;
-  // Birthdate previously used for legacy birthday discounts; removed in promotion system.
-  // If birthday-based promotions are reintroduced, fetch here.
+    // Birthdate previously used for legacy birthday discounts; removed in promotion system.
+    // If birthday-based promotions are reintroduced, fetch here.
+  }
+
+  Future<void> _sanitizeHiddenEntitiesInCart() async {
+    final result = await MenuVisibilityService.sanitizeCartHiddenEntities(
+      source: 'cart_screen',
+    );
+    if (!mounted || !result.hasUnavailable) return;
+    final parts = <String>[];
+    if (result.removedItems > 0) parts.add('${result.removedItems} Artikel');
+    if (result.removedExtras > 0) parts.add('${result.removedExtras} Extras');
+    if (result.removedOptions > 0)
+      parts.add('${result.removedOptions} Optionen');
+    final suffix = parts.isEmpty ? 'Positionen' : parts.join(', ');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Einige nicht verfügbare Elemente wurden entfernt: $suffix.',
+        ),
+      ),
+    );
   }
 
   Future<int?> _getCategoryId(int itemId) async {
     if (_itemCategoryCache.containsKey(itemId)) {
       return _itemCategoryCache[itemId];
     }
-  final res = await Supabase.instance.client
-    .from('menu_v2_item')
-    .select('category_id')
-    .eq('id', itemId)
-    .maybeSingle();
+    final res = await Supabase.instance.client
+        .from('menu_v2_item')
+        .select('category_id')
+        .eq('restaurant_id', RestaurantContext.current)
+        .eq('id', itemId)
+        .maybeSingle();
     final categoryId = res?['category_id'] as int?;
     if (categoryId != null) {
       _itemCategoryCache[itemId] = categoryId;
@@ -132,14 +168,15 @@ class _CartScreenState extends State<CartScreen>
     return categoryId;
   }
 
-  Future<List<_ExtraInfo>> _loadExtrasInfo(
-      int itemId, Map<int, int> extrasMap, {int? sizeId, String? sizeName}) async {
+  Future<List<_ExtraInfo>> _loadExtrasInfo(int itemId, Map<int, int> extrasMap,
+      {int? sizeId, String? sizeName}) async {
     if (extrasMap.isEmpty) return [];
     int? resolvedSizeId = sizeId;
     if (resolvedSizeId == null && (sizeName != null && sizeName.isNotEmpty)) {
       final szRow = await Supabase.instance.client
           .from('menu_size')
           .select('id')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('name', sizeName)
           .maybeSingle();
       if (szRow == null) return [];
@@ -152,6 +189,7 @@ class _CartScreenState extends State<CartScreen>
       final extraPriceRows = await Supabase.instance.client
           .from('menu_v2_extra_price_by_size')
           .select('extra_id, price')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('size_id', resolvedSizeId)
           .filter('extra_id', 'in', extrasMap.keys.toList());
       for (var row in extraPriceRows as List) {
@@ -164,19 +202,21 @@ class _CartScreenState extends State<CartScreen>
     final extraRows = await Supabase.instance.client
         .from('menu_v2_extra')
         .select('id, name')
+        .eq('restaurant_id', RestaurantContext.current)
         .filter('id', 'in', extrasMap.keys.toList());
     final nameMap = <int, String>{
-      for (var row in extraRows as List) ((row['id'] as int?) ?? 0): ((row['name'] as String?) ?? ''),
+      for (var row in extraRows as List)
+        ((row['id'] as int?) ?? 0): ((row['name'] as String?) ?? ''),
     };
 
-  return extrasMap.entries
-    .map((e) => _ExtraInfo(
-        id: e.key,
-        name: nameMap[e.key] ?? 'Неизвестно',
-        price: priceMap[e.key] ?? 0,
-        quantity: e.value,
-      ))
-    .toList();
+    return extrasMap.entries
+        .map((e) => _ExtraInfo(
+              id: e.key,
+              name: nameMap[e.key] ?? 'Неизвестно',
+              price: priceMap[e.key] ?? 0,
+              quantity: e.value,
+            ))
+        .toList();
   }
 
   Future<List<_OptionInfo>> _loadOptionsInfo(Map<int, int> optionsMap) async {
@@ -184,12 +224,14 @@ class _CartScreenState extends State<CartScreen>
     final optRows = await Supabase.instance.client
         .from('menu_v2_modifier_option')
         .select('id, name')
+        .eq('restaurant_id', RestaurantContext.current)
         .filter('id', 'in', optionsMap.keys.toList());
     final list = (optRows as List).cast<Map<String, dynamic>>();
     return list.map((row) {
       final id = (row['id'] as int?) ?? 0;
       final name = (row['name'] as String?) ?? '';
-      return _OptionInfo(id: id, name: name, priceDelta: 0.0, quantity: optionsMap[id] ?? 0);
+      return _OptionInfo(
+          id: id, name: name, priceDelta: 0.0, quantity: optionsMap[id] ?? 0);
     }).toList();
   }
 
@@ -218,7 +260,10 @@ class _CartScreenState extends State<CartScreen>
     if (mounted) setState(() {});
   }
 
-  Widget _qtyStepper({required int qty, required VoidCallback onDec, required VoidCallback onInc}) {
+  Widget _qtyStepper(
+      {required int qty,
+      required VoidCallback onDec,
+      required VoidCallback onInc}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -249,29 +294,39 @@ class _CartScreenState extends State<CartScreen>
       final uniqueItemIds = <int>{}..addAll(items.map((e) => e.itemId));
       final grouped = <String, List<CartItem>>{};
       for (final cartItem in items) {
-        final optionsSig = cartItem.options.entries.map((e) => '${e.key}:${e.value}').join(',');
+        final optionsSig = cartItem.options.entries
+            .map((e) => '${e.key}:${e.value}')
+            .join(',');
         String bundleSig = '';
         if (cartItem.meta?['type'] == 'bundle') {
-          final slots = (cartItem.meta?['slots'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
+          final slots = (cartItem.meta?['slots'] as List?)
+                  ?.cast<Map<String, dynamic>>() ??
+              const <Map<String, dynamic>>[];
           final slotParts = <String>[];
-            for (final s in slots) {
-              final sid = (s['slotId'] as int?) ?? 0;
-              final itemsList = (s['items'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
-              final itemParts = <String>[];
-              for (final it in itemsList) {
-                final iid = (it['itemId'] as int?) ?? 0;
-                final sz = (it['sizeId'] as int?) ?? -1;
-                final oids = ((it['optionIds'] as List?) ?? const <dynamic>[])..sort();
-                final eids = ((it['extraIds'] as List?) ?? const <dynamic>[])..sort();
-                itemParts.add('i:$iid|s:$sz|o:${oids.join(";")}|e:${eids.join(";")}');
-              }
-              itemParts.sort();
-              slotParts.add('slot:$sid=>${itemParts.join("#")}');
+          for (final s in slots) {
+            final sid = (s['slotId'] as int?) ?? 0;
+            final itemsList =
+                (s['items'] as List?)?.cast<Map<String, dynamic>>() ??
+                    const <Map<String, dynamic>>[];
+            final itemParts = <String>[];
+            for (final it in itemsList) {
+              final iid = (it['itemId'] as int?) ?? 0;
+              final sz = (it['sizeId'] as int?) ?? -1;
+              final oids = ((it['optionIds'] as List?) ?? const <dynamic>[])
+                ..sort();
+              final eids = ((it['extraIds'] as List?) ?? const <dynamic>[])
+                ..sort();
+              itemParts
+                  .add('i:$iid|s:$sz|o:${oids.join(";")}|e:${eids.join(";")}');
             }
+            itemParts.sort();
+            slotParts.add('slot:$sid=>${itemParts.join("#")}');
+          }
           slotParts.sort();
           bundleSig = slotParts.join('||');
         }
-        final key = '${cartItem.itemId}|${cartItem.size}|${cartItem.extras.entries.map((e) => '${e.key}:${e.value}').join(',')}|$optionsSig|$bundleSig';
+        final key =
+            '${cartItem.itemId}|${cartItem.size}|${cartItem.extras.entries.map((e) => '${e.key}:${e.value}').join(',')}|$optionsSig|$bundleSig';
         grouped.putIfAbsent(key, () => []).add(cartItem);
         _commentControllers.putIfAbsent(key, () => TextEditingController());
       }
@@ -283,10 +338,13 @@ class _CartScreenState extends State<CartScreen>
       for (final entry in grouped.entries) {
         final first = entry.value.first;
         final count = entry.value.length;
-        final extras = await _loadExtrasInfo(first.itemId, first.extras, sizeId: first.sizeId, sizeName: first.size);
-        final extrasCost = extras.fold<double>(0, (p, e) => p + e.price * e.quantity);
+        final extras = await _loadExtrasInfo(first.itemId, first.extras,
+            sizeId: first.sizeId, sizeName: first.size);
+        final extrasCost =
+            extras.fold<double>(0, (p, e) => p + e.price * e.quantity);
         final opts = await _loadOptionsInfo(first.options);
-        final optsCost = opts.fold<double>(0, (p, o) => p + o.priceDelta * o.quantity);
+        final optsCost =
+            opts.fold<double>(0, (p, o) => p + o.priceDelta * o.quantity);
         final unitPrice = first.basePrice + extrasCost + optsCost;
         final lineTotal = unitPrice * count;
         subtotal += lineTotal;
@@ -298,11 +356,43 @@ class _CartScreenState extends State<CartScreen>
           itemId: first.itemId,
           categoryId: categoryId,
           sizeId: first.sizeId,
+          selectedExtraIds: first.extras.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toSet(),
+          selectedModifierOptionIds: first.options.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toSet(),
+          selectedExtraLineItems: extras
+              .where((e) => e.quantity > 0)
+              .map((e) => {
+                    'id': e.id,
+                    'quantity': e.quantity,
+                    'unit_price': e.price,
+                  })
+              .toList(),
         );
         cartList.add({
           'id': first.itemId,
           'category_id': categoryId,
           'size_id': first.sizeId,
+          'extra_ids': first.extras.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toList(),
+          'modifier_option_ids': first.options.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toList(),
+          'extra_line_items': extras
+              .where((e) => e.quantity > 0)
+              .map((e) => {
+                    'id': e.id,
+                    'quantity': e.quantity,
+                    'unit_price': e.price,
+                  })
+              .toList(),
           'price': unitPrice,
           'quantity': count,
         });
@@ -320,6 +410,7 @@ class _CartScreenState extends State<CartScreen>
           final rows = await Supabase.instance.client
               .from('menu_v2_item')
               .select('id, has_sizes')
+              .eq('restaurant_id', RestaurantContext.current)
               .filter('id', 'in', inIds);
           final map = <int, bool>{};
           for (final r in (rows as List)) {
@@ -383,7 +474,8 @@ class _CartScreenState extends State<CartScreen>
               style: GoogleFonts.fredokaOne(color: appTheme.primaryColor)),
           centerTitle: true,
         ),
-        body: const Center(child: CircularProgressIndicator(color: Colors.orange)),
+        body: const Center(
+            child: CircularProgressIndicator(color: Colors.orange)),
       );
     }
     if (_error != null) {
@@ -409,21 +501,29 @@ class _CartScreenState extends State<CartScreen>
     final items = CartService.items;
     final grouped = <String, List<CartItem>>{};
     for (final cartItem in items) {
-      final optionsSig = cartItem.options.entries.map((e) => '${e.key}:${e.value}').join(',');
+      final optionsSig =
+          cartItem.options.entries.map((e) => '${e.key}:${e.value}').join(',');
       String bundleSig = '';
       if (cartItem.meta?['type'] == 'bundle') {
-        final slots = (cartItem.meta?['slots'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
+        final slots =
+            (cartItem.meta?['slots'] as List?)?.cast<Map<String, dynamic>>() ??
+                const <Map<String, dynamic>>[];
         final slotParts = <String>[];
         for (final s in slots) {
           final sid = (s['slotId'] as int?) ?? 0;
-          final itemsList = (s['items'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
+          final itemsList =
+              (s['items'] as List?)?.cast<Map<String, dynamic>>() ??
+                  const <Map<String, dynamic>>[];
           final itemParts = <String>[];
           for (final it in itemsList) {
             final iid = (it['itemId'] as int?) ?? 0;
             final sz = (it['sizeId'] as int?) ?? -1;
-            final oids = ((it['optionIds'] as List?) ?? const <dynamic>[])..sort();
-            final eids = ((it['extraIds'] as List?) ?? const <dynamic>[])..sort();
-            itemParts.add('i:$iid|s:$sz|o:${oids.join(";")}|e:${eids.join(";")}');
+            final oids = ((it['optionIds'] as List?) ?? const <dynamic>[])
+              ..sort();
+            final eids = ((it['extraIds'] as List?) ?? const <dynamic>[])
+              ..sort();
+            itemParts
+                .add('i:$iid|s:$sz|o:${oids.join(";")}|e:${eids.join(";")}');
           }
           itemParts.sort();
           slotParts.add('slot:$sid=>${itemParts.join("#")}');
@@ -431,7 +531,8 @@ class _CartScreenState extends State<CartScreen>
         slotParts.sort();
         bundleSig = slotParts.join('||');
       }
-      final key = '${cartItem.itemId}|${cartItem.size}|${cartItem.extras.entries.map((e) => '${e.key}:${e.value}').join(',')}|$optionsSig|$bundleSig';
+      final key =
+          '${cartItem.itemId}|${cartItem.size}|${cartItem.extras.entries.map((e) => '${e.key}:${e.value}').join(',')}|$optionsSig|$bundleSig';
       grouped.putIfAbsent(key, () => []).add(cartItem);
     }
     final lines = grouped.entries.map((entry) {
@@ -464,14 +565,22 @@ class _CartScreenState extends State<CartScreen>
                   height: 24,
                   decoration: BoxDecoration(
                     color: Colors.redAccent.withOpacity(0.12),
-                    border: Border(top: BorderSide(color: Colors.redAccent.withOpacity(0.35), width: 0.8)),
+                    border: Border(
+                        top: BorderSide(
+                            color: Colors.redAccent.withOpacity(0.35),
+                            width: 0.8)),
                   ),
                   alignment: Alignment.center,
                   child: _computingMinOrder
-                      ? Text('Prüfe Mindestbestellwert…', style: GoogleFonts.poppins(color: Colors.redAccent, fontSize: 11))
+                      ? Text('Prüfe Mindestbestellwert…',
+                          style: GoogleFonts.poppins(
+                              color: Colors.redAccent, fontSize: 11))
                       : Text(
                           'Noch €${(_minOrderAmount! - _totalSum).clamp(0, _minOrderAmount!).toStringAsFixed(2)} bis Mindestbestellwert (€${_minOrderAmount!.toStringAsFixed(2)})',
-                          style: GoogleFonts.poppins(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                          style: GoogleFonts.poppins(
+                              color: Colors.redAccent,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600),
                         ),
                 ),
               )
@@ -483,7 +592,8 @@ class _CartScreenState extends State<CartScreen>
             child: lines.isEmpty
                 ? Center(
                     child: Text('Ihr Warenkorb ist leer',
-                        style: GoogleFonts.poppins(color: appTheme.textColorSecondary)),
+                        style: GoogleFonts.poppins(
+                            color: appTheme.textColorSecondary)),
                   )
                 : ListView.builder(
                     padding: const EdgeInsets.symmetric(
@@ -498,194 +608,282 @@ class _CartScreenState extends State<CartScreen>
                       // baseTotal не используется в отображении — общий итог внизу
                       return FutureBuilder<List<_ExtraInfo>>(
                         future: _loadExtrasInfo(
-                            cartItem.itemId, cartItem.extras, sizeId: cartItem.sizeId, sizeName: cartItem.size),
+                            cartItem.itemId, cartItem.extras,
+                            sizeId: cartItem.sizeId, sizeName: cartItem.size),
                         builder: (context, snap) {
                           final extras = snap.data ?? [];
-                              // extrasCost не используется в отображении — выводим построчно
+                          // extrasCost не используется в отображении — выводим построчно
                           return FutureBuilder<List<_OptionInfo>>(
                             future: _loadOptionsInfo(cartItem.options),
                             builder: (context, osnap) {
                               final opts = osnap.data ?? [];
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 12),
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: appTheme.cardColor,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      // Основная строка: слева позиция, справа цена позиции (за 1 шт.)
-                                      Row(
-                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: appTheme.cardColor,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  () {
-                                                    // Специальная обработка Bundle: скрываем содержимое скобок и префиксы
-                                                    String rawName = cartItem.name;
-                                                    if (cartItem.meta != null && cartItem.meta!['type'] == 'bundle') {
-                                                      // Удаляем любые (...) и [...] вместе с содержимым
-                                                      rawName = rawName.replaceAll(RegExp(r'\([^)]*\)'), '')
-                                                                       .replaceAll(RegExp(r'\[[^]]*\]'), '')
-                                                                       .replaceAll(RegExp(r'\s{2,}'), ' ')
-                                                                       .trim();
-                                                    }
-                                                    final articlePrefix = (cartItem.article != null && cartItem.meta?['type'] != 'bundle')
-                                                        ? '[${cartItem.article!}] '
-                                                        : '';
-                                                    final hasMulti = _hasSizes[cartItem.itemId] ?? true;
-                                                    final sizeSuffix = (hasMulti && cartItem.size.trim().isNotEmpty && cartItem.meta?['type'] != 'bundle')
-                                                        ? ' (${cartItem.size})'
-                                                        : '';
-                                                    return '$count × $articlePrefix$rawName$sizeSuffix';
-                                                  }(),
-                                                  style: GoogleFonts.poppins(
-                                                    color: appTheme.textColor,
-                                                    fontSize: 16,
-                                                    fontWeight: FontWeight.w600,
-                                                  ),
-                                                ),
-                                                // Детализация состава Bundle
-                                                if (cartItem.meta != null && cartItem.meta!['type'] == 'bundle') ...[
-                                                  const SizedBox(height: 6),
-                                                  ..._buildBundleComposition(cartItem.meta!),
-                                                ],
-                                              ],
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Column(
-                                            crossAxisAlignment: CrossAxisAlignment.end,
+                                          // Основная строка: слева позиция, справа цена позиции (за 1 шт.)
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
                                             children: [
-                                              if (priceInfo != null)
-                                                PriceWithPromotion(
-                                                  basePrice: priceInfo.basePrice,
-                                                  finalPrice: priceInfo.finalPrice,
-                                                  formatter: (value) => '€${value.toStringAsFixed(2)}',
-                                                  finalStyle: GoogleFonts.poppins(
-                                                    color: appTheme.textColor,
-                                                    fontSize: 14,
-                                                    fontWeight: FontWeight.w600,
-                                                  ),
-                                                  baseStyle: GoogleFonts.poppins(
-                                                    color: appTheme.textColor.withValues(alpha: 0.65),
-                                                    fontSize: 13,
-                                                  ),
-                                                  alignment: MainAxisAlignment.end,
-                                                )
-                                              else
-                                                Text(
-                                                  '€${cartItem.basePrice.toStringAsFixed(2)}',
-                                                  style: GoogleFonts.poppins(
-                                                    color: appTheme.textColor,
-                                                    fontSize: 14,
-                                                    fontWeight: FontWeight.w600,
-                                                  ),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      () {
+                                                        // Специальная обработка Bundle: скрываем содержимое скобок и префиксы
+                                                        String rawName =
+                                                            cartItem.name;
+                                                        if (cartItem.meta !=
+                                                                null &&
+                                                            cartItem.meta![
+                                                                    'type'] ==
+                                                                'bundle') {
+                                                          // Удаляем любые (...) и [...] вместе с содержимым
+                                                          rawName = rawName
+                                                              .replaceAll(
+                                                                  RegExp(
+                                                                      r'\([^)]*\)'),
+                                                                  '')
+                                                              .replaceAll(
+                                                                  RegExp(
+                                                                      r'\[[^]]*\]'),
+                                                                  '')
+                                                              .replaceAll(
+                                                                  RegExp(
+                                                                      r'\s{2,}'),
+                                                                  ' ')
+                                                              .trim();
+                                                        }
+                                                        final articlePrefix = (cartItem
+                                                                        .article !=
+                                                                    null &&
+                                                                cartItem.meta?[
+                                                                        'type'] !=
+                                                                    'bundle')
+                                                            ? '[${cartItem.article!}] '
+                                                            : '';
+                                                        final hasMulti =
+                                                            _hasSizes[cartItem
+                                                                    .itemId] ??
+                                                                true;
+                                                        final sizeSuffix = (hasMulti &&
+                                                                cartItem.size
+                                                                    .trim()
+                                                                    .isNotEmpty &&
+                                                                cartItem.meta?[
+                                                                        'type'] !=
+                                                                    'bundle')
+                                                            ? ' (${cartItem.size})'
+                                                            : '';
+                                                        return '$count × $articlePrefix$rawName$sizeSuffix';
+                                                      }(),
+                                                      style:
+                                                          GoogleFonts.poppins(
+                                                        color:
+                                                            appTheme.textColor,
+                                                        fontSize: 16,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                    // Детализация состава Bundle
+                                                    if (cartItem.meta != null &&
+                                                        cartItem.meta![
+                                                                'type'] ==
+                                                            'bundle') ...[
+                                                      const SizedBox(height: 6),
+                                                      ..._buildBundleComposition(
+                                                          cartItem.meta!),
+                                                    ],
+                                                  ],
                                                 ),
-                                              const SizedBox(height: 4),
-                                              _qtyStepper(
-                                                qty: count,
-                                                onDec: () async {
-                                                  await CartService.removeItem(cartItem);
-                                                  await _recalculateTotal();
-                                                  if (mounted) setState(() {});
-                                                },
-                                                onInc: () async {
-                                                  await CartService.addItem(cartItem);
-                                                  await _recalculateTotal();
-                                                  if (mounted) setState(() {});
-                                                },
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.end,
+                                                children: [
+                                                  if (priceInfo != null)
+                                                    PriceWithPromotion(
+                                                      basePrice:
+                                                          priceInfo.basePrice,
+                                                      finalPrice:
+                                                          priceInfo.finalPrice,
+                                                      formatter: (value) =>
+                                                          '€${value.toStringAsFixed(2)}',
+                                                      finalStyle:
+                                                          GoogleFonts.poppins(
+                                                        color:
+                                                            appTheme.textColor,
+                                                        fontSize: 14,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                      baseStyle:
+                                                          GoogleFonts.poppins(
+                                                        color: appTheme
+                                                            .textColor
+                                                            .withValues(
+                                                                alpha: 0.65),
+                                                        fontSize: 13,
+                                                      ),
+                                                      alignment:
+                                                          MainAxisAlignment.end,
+                                                    )
+                                                  else
+                                                    Text(
+                                                      '€${cartItem.basePrice.toStringAsFixed(2)}',
+                                                      style:
+                                                          GoogleFonts.poppins(
+                                                        color:
+                                                            appTheme.textColor,
+                                                        fontSize: 14,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  const SizedBox(height: 4),
+                                                  _qtyStepper(
+                                                    qty: count,
+                                                    onDec: () async {
+                                                      await CartService
+                                                          .removeItem(cartItem);
+                                                      await _recalculateTotal();
+                                                      if (mounted)
+                                                        setState(() {});
+                                                    },
+                                                    onInc: () async {
+                                                      await CartService.addItem(
+                                                          cartItem);
+                                                      await _recalculateTotal();
+                                                      if (mounted)
+                                                        setState(() {});
+                                                    },
+                                                  ),
+                                                ],
                                               ),
                                             ],
                                           ),
-                                        ],
-                                      ),
-                                      // --- ДОПОЛНЕНИЯ ---
-                                      if (extras.isNotEmpty) ...[
-                                        const SizedBox(height: 6),
-                                        ...extras.map((e) => Row(
-                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Expanded(
-                                                  child: Text(
-                                                    '${e.quantity} × ${e.name}',
-                                                    style: GoogleFonts.poppins(
-                                                      color: appTheme.textColorSecondary,
-                                                      fontSize: 13,
-                                                    ),
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Column(
-                                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                          // --- ДОПОЛНЕНИЯ ---
+                                          if (extras.isNotEmpty) ...[
+                                            const SizedBox(height: 6),
+                                            ...extras.map((e) => Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment
+                                                          .spaceBetween,
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
                                                   children: [
-                                                    Text(
-                                                      '+€${e.price.toStringAsFixed(2)}',
-                                                      style: GoogleFonts.poppins(
-                                                        color: appTheme.textColorSecondary,
-                                                        fontSize: 13,
+                                                    Expanded(
+                                                      child: Text(
+                                                        '${e.quantity} × ${e.name}',
+                                                        style:
+                                                            GoogleFonts.poppins(
+                                                          color: appTheme
+                                                              .textColorSecondary,
+                                                          fontSize: 13,
+                                                        ),
                                                       ),
                                                     ),
-                                                    const SizedBox(height: 4),
-                                                    _qtyStepper(
-                                                      qty: e.quantity,
-                                                      onDec: () => _changeExtraQty(cartItem, e.id, (e.quantity - 1).clamp(0, 9999)),
-                                                      onInc: () => _changeExtraQty(cartItem, e.id, e.quantity + 1),
+                                                    const SizedBox(width: 8),
+                                                    Column(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .end,
+                                                      children: [
+                                                        Text(
+                                                          '+€${e.price.toStringAsFixed(2)}',
+                                                          style: GoogleFonts
+                                                              .poppins(
+                                                            color: appTheme
+                                                                .textColorSecondary,
+                                                            fontSize: 13,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                            height: 4),
+                                                        _qtyStepper(
+                                                          qty: e.quantity,
+                                                          onDec: () =>
+                                                              _changeExtraQty(
+                                                                  cartItem,
+                                                                  e.id,
+                                                                  (e.quantity -
+                                                                          1)
+                                                                      .clamp(0,
+                                                                          9999)),
+                                                          onInc: () =>
+                                                              _changeExtraQty(
+                                                                  cartItem,
+                                                                  e.id,
+                                                                  e.quantity +
+                                                                      1),
+                                                        ),
+                                                      ],
                                                     ),
                                                   ],
-                                                ),
-                                              ],
-                                            )),
-                                      ],
-                                      // --- ОПЦИИ ---
-                                      if (opts.isNotEmpty) ...[
-                                        const SizedBox(height: 6),
-                                        ...opts.map((o) => Row(
-                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Expanded(
-                                                  child: Text(
-                                                    '${o.quantity} × ${o.name}',
-                                                    style: GoogleFonts.poppins(
-                                                      color: appTheme.textColorSecondary,
-                                                      fontSize: 13,
+                                                )),
+                                          ],
+                                          // --- ОПЦИИ ---
+                                          if (opts.isNotEmpty) ...[
+                                            const SizedBox(height: 6),
+                                            ...opts.map((o) => Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment
+                                                          .spaceBetween,
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Expanded(
+                                                      child: Text(
+                                                        '${o.quantity} × ${o.name}',
+                                                        style:
+                                                            GoogleFonts.poppins(
+                                                          color: appTheme
+                                                              .textColorSecondary,
+                                                          fontSize: 13,
+                                                        ),
+                                                      ),
                                                     ),
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 8),
-                                                // Модификаторы (опции) теперь нередактируемы в корзине: без степпера.
-                                                if (o.priceDelta != 0)
-                                                  Text(
-                                                    '+€${o.priceDelta.toStringAsFixed(2)}',
-                                                    style: GoogleFonts.poppins(
-                                                      color: appTheme.textColorSecondary,
-                                                      fontSize: 13,
-                                                    ),
-                                                  )
-                                                else
-                                                  const SizedBox.shrink(),
-                                              ],
-                                            )),
-                                      ],
-                                      const SizedBox(height: 8),
-                                    ],
-                                  ),
+                                                    const SizedBox(width: 8),
+                                                    // Модификаторы (опции) теперь нередактируемы в корзине: без степпера.
+                                                    if (o.priceDelta != 0)
+                                                      Text(
+                                                        '+€${o.priceDelta.toStringAsFixed(2)}',
+                                                        style:
+                                                            GoogleFonts.poppins(
+                                                          color: appTheme
+                                                              .textColorSecondary,
+                                                          fontSize: 13,
+                                                        ),
+                                                      )
+                                                    else
+                                                      const SizedBox.shrink(),
+                                                  ],
+                                                )),
+                                          ],
+                                          const SizedBox(height: 8),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox.shrink(),
+                                  ],
                                 ),
-                                const SizedBox.shrink(),
-                              ],
-                            ),
                               );
                             },
                           );
@@ -694,7 +892,6 @@ class _CartScreenState extends State<CartScreen>
                     },
                   ),
           ),
-
           SafeArea(
             top: false,
             child: Container(
@@ -725,12 +922,16 @@ class _CartScreenState extends State<CartScreen>
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        _totalDiscount > 0 ? 'Gesamt (inkl. Rabatt):' : 'Gesamt:',
-                        style: GoogleFonts.poppins(color: appTheme.textColor, fontSize: 18),
+                        _totalDiscount > 0
+                            ? 'Gesamt (inkl. Rabatt):'
+                            : 'Gesamt:',
+                        style: GoogleFonts.poppins(
+                            color: appTheme.textColor, fontSize: 18),
                       ),
                       Text(
                         '€${_totalSum.toStringAsFixed(2)}',
-                        style: GoogleFonts.poppins(color: appTheme.textColor, fontSize: 18),
+                        style: GoogleFonts.poppins(
+                            color: appTheme.textColor, fontSize: 18),
                       ),
                     ],
                   ),
@@ -755,24 +956,39 @@ class _CartScreenState extends State<CartScreen>
                             );
                           }
                         : () {
-                            final comments = _commentControllers
-                                .map((k, v) => MapEntry(k, v.text.trim()));
-                            final roundedTotal =
-                                double.parse(_totalSum.toStringAsFixed(2));
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => CheckoutScreen(
-                                  totalSum: roundedTotal,
-                                  itemComments: comments,
-                                  totalDiscount: _totalDiscount,
-                                  appliedDiscounts: _appliedDiscounts,
+                            _sanitizeHiddenEntitiesInCart().then((_) async {
+                              await _recalculateTotal();
+                              if (!mounted) return;
+                              if (CartService.items.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Warenkorb wurde aktualisiert. Fügen Sie bitte verfügbare Artikel hinzu.',
+                                    ),
+                                  ),
+                                );
+                                return;
+                              }
+                              final comments = _commentControllers
+                                  .map((k, v) => MapEntry(k, v.text.trim()));
+                              final roundedTotal =
+                                  double.parse(_totalSum.toStringAsFixed(2));
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => CheckoutScreen(
+                                    totalSum: roundedTotal,
+                                    itemComments: comments,
+                                    totalDiscount: _totalDiscount,
+                                    appliedDiscounts: _appliedDiscounts,
+                                  ),
                                 ),
-                              ),
-                            );
+                              );
+                            });
                           },
                     child: Text('Zur Kasse',
-                        style: GoogleFonts.poppins(color: appTheme.textColor, fontSize: 18)),
+                        style: GoogleFonts.poppins(
+                            color: appTheme.textColor, fontSize: 18)),
                   ),
                 ],
               ),
@@ -788,11 +1004,13 @@ extension on _CartScreenState {
   // Построить строки состава бандла по meta
   List<Widget> _buildBundleComposition(Map<String, dynamic> meta) {
     final appTheme = ThemeProvider.of(context);
-    final slots = (meta['slots'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
+    final slots = (meta['slots'] as List?)?.cast<Map<String, dynamic>>() ??
+        const <Map<String, dynamic>>[];
     final widgets = <Widget>[];
     for (final slot in slots) {
       final slotName = (slot['name'] as String?) ?? '';
-      final items = (slot['items'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
+      final items = (slot['items'] as List?)?.cast<Map<String, dynamic>>() ??
+          const <Map<String, dynamic>>[];
       if (items.isEmpty) continue;
       // строка с названием слота
       widgets.add(Text(
@@ -807,8 +1025,10 @@ extension on _CartScreenState {
       for (final it in items) {
         final name = (it['itemName'] as String?) ?? '';
         final sizeName = (it['sizeName'] as String?) ?? '';
-        final extraNames = (it['extraNames'] as List?)?.cast<String>() ?? const <String>[];
-        final optionNames = (it['optionNames'] as List?)?.cast<String>() ?? const <String>[];
+        final extraNames =
+            (it['extraNames'] as List?)?.cast<String>() ?? const <String>[];
+        final optionNames =
+            (it['optionNames'] as List?)?.cast<String>() ?? const <String>[];
         final sizePart = sizeName.isNotEmpty ? ' ($sizeName)' : '';
         widgets.add(Padding(
           padding: const EdgeInsets.only(left: 8, top: 2),
@@ -821,7 +1041,9 @@ extension on _CartScreenState {
           ),
         ));
         // Детали выбора: платные Extras/модификаторы построчно
-        final detailEntries = (it['detailEntries'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
+        final detailEntries =
+            (it['detailEntries'] as List?)?.cast<Map<String, dynamic>>() ??
+                const <Map<String, dynamic>>[];
         if (detailEntries.isNotEmpty) {
           for (final d in detailEntries) {
             final name = (d['name'] as String?) ?? '';

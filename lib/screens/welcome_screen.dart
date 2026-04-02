@@ -2,11 +2,13 @@
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
-import 'package:google_fonts/google_fonts.dart';
 
+import '../services/app_config_service.dart';
 import '../services/consent_service.dart';
-import '../constants/legal_texts.dart';
+import '../theme/theme_provider.dart';
+import '../utils/app_text.dart';
 import 'cookie_settings_screen.dart';
 
 class WelcomeScreen extends StatefulWidget {
@@ -18,6 +20,7 @@ class WelcomeScreen extends StatefulWidget {
 class _WelcomeScreenState extends State<WelcomeScreen>
     with TickerProviderStateMixin {
   late final VideoPlayerController _videoController;
+  late final String _videoAsset;
   bool _initialized = false;
 
   late final AnimationController _entryController;
@@ -71,7 +74,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       CurvedAnimation(parent: _textController, curve: Curves.easeIn),
     );
 
-    _videoController = VideoPlayerController.asset('assets/onboarding.mp4')
+    _videoAsset = AppConfigService.string(
+      'branding.splash.video',
+      fallback: 'assets/onboarding.mp4',
+    );
+    _videoController = VideoPlayerController.asset(_videoAsset)
       ..initialize().then((_) {
         _videoController
           ..setLooping(true)
@@ -108,60 +115,58 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
   }
 
-  void _showLegalDialog() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('AGB & Datenschutzerklärung'),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Allgemeine Geschäftsbedingungen (AGB)',
-                style: GoogleFonts.poppins(
-                    fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Text(LegalTexts.agb,
-                  style: GoogleFonts.poppins(fontSize: 12)),
-              const SizedBox(height: 16),
-              Text(
-                'Datenschutzerklärung',
-                style: GoogleFonts.poppins(
-                    fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Text(LegalTexts.datenschutz,
-                  style: GoogleFonts.poppins(fontSize: 12)),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Schließen'),
-          )
-        ],
-      ),
-    );
+  Future<void> _openLink(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   @override
   Widget build(BuildContext context) {
+    final appTheme = ThemeProvider.of(context);
+    final splashBg = AppConfigService.color(
+      'branding.splash.backgroundColor',
+      fallback: appTheme.primaryColor,
+    );
+    final overlayColor = AppConfigService.color(
+      'branding.splash.overlayColor',
+      fallback: const Color(0xFF181818),
+    );
+    final overlayOpacity = AppConfigService.number(
+      'branding.splash.overlayOpacity',
+      fallback: 0.73,
+    );
+    final logoAsset = AppConfigService.string(
+      'branding.logo',
+      fallback: 'assets/logo.png',
+    );
     if (!_initialized) {
-      return const Scaffold(
-        backgroundColor: Color(0xFFF07523),
-      );
+      return Scaffold(backgroundColor: splashBg);
     }
 
     final size = MediaQuery.of(context).size;
     double vh(double px) => size.height * px / 844;
     double vw(double px) => size.width * px / 390;
-    const orange = Color(0xFFF07523);
+    final brandTitle = AppText.t(
+      'welcome.title',
+      fallback: AppConfigService.string('branding.name', fallback: 'City Pizza'),
+    );
+    final brandSubtitle = AppText.t(
+      'welcome.subtitle',
+      fallback:
+          AppConfigService.string('branding.tagline', fallback: 'Pizza & Küche'),
+    );
+    final termsUrl = AppConfigService.string(
+      'contact.links.agb',
+      fallback: 'https://dmytro8522.github.io/citypizza-legal/terms.html',
+    );
+    final privacyUrl = AppConfigService.string(
+      'contact.links.datenschutz',
+      fallback: 'https://dmytro8522.github.io/citypizza-legal/index.html',
+    );
 
     return Scaffold(
-      backgroundColor: orange,
+      backgroundColor: splashBg,
       body: Stack(
         children: [
           ClipRRect(
@@ -185,11 +190,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               child: Container(
                 height: size.height * 0.6,
                 width: size.width,
-                color: const Color(0xFF181818).withOpacity(0.73),
+                color: overlayColor.withOpacity(overlayOpacity),
               ),
             ),
           ),
-
           SafeArea(
             child: Column(
               children: [
@@ -202,7 +206,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                       scale: _pulseScale,
                       child: Center(
                         child: Image.asset(
-                          'assets/logo.png',
+                          logoAsset,
                           width: vw(289),
                           height: vw(289),
                         ),
@@ -215,11 +219,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                   child: Transform.translate(
                     offset: Offset(0, -vh(12)),
                     child: Text(
-                      'City Pizza',
+                      brandTitle,
                       textAlign: TextAlign.center,
-                      style: GoogleFonts.fredokaOne(
-                        fontSize: 40,
-                        color: Colors.white,
+                      style: AppText.heading(
+                        size: 40,
+                        color: appTheme.textColor,
                       ),
                     ),
                   ),
@@ -229,11 +233,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                   child: Padding(
                     padding: EdgeInsets.only(top: vh(12)),
                     child: Text(
-                      'Pizza & Indische Küche',
+                      brandSubtitle,
                       textAlign: TextAlign.center,
-                      style: GoogleFonts.fredokaOne(
-                        fontSize: 28,
-                        color: Colors.white,
+                      style: AppText.heading(
+                        size: 28,
+                        color: appTheme.textColor,
                       ),
                     ),
                   ),
@@ -243,7 +247,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                   opacity: _textFade,
                   child: Container(
                     width: double.infinity,
-                    color: orange,
+                    color: splashBg,
                     padding: EdgeInsets.symmetric(
                       horizontal: vw(32),
                       vertical: vh(24),
@@ -252,34 +256,70 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          'Pizza, Pasta, alles was du liebst – direkt zu dir.',
+                          AppText.t(
+                            'welcome.cta',
+                            fallback:
+                                'Pizza, Pasta, alles was du liebst – direkt zu dir.',
+                          ),
                           textAlign: TextAlign.center,
-                          style: GoogleFonts.poppins(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
+                          style: AppText.font(
+                            size: 20,
+                            weight: FontWeight.w600,
+                            color: appTheme.textColor,
                           ),
                         ),
                         SizedBox(height: vh(16)),
                         RichText(
                           textAlign: TextAlign.center,
                           text: TextSpan(
-                            style: GoogleFonts.poppins(
-                              fontSize: 10,
-                              color: Colors.white,
+                            style: AppText.font(
+                              size: 10,
+                              color: appTheme.textColor,
                             ),
                             children: [
-                              const TextSpan(text: 'Mit dem Start akzeptierst du unsere '),
                               TextSpan(
-                                text: 'AGB & Datenschutzerklärung',
+                                text: AppText.t(
+                                  'welcome.legalPrefix',
+                                  fallback:
+                                      'Mit dem Start akzeptierst du unsere ',
+                                ),
+                              ),
+                              TextSpan(
+                                text: AppText.t(
+                                  'welcome.legalAgb',
+                                  fallback: 'AGB',
+                                ),
                                 style: const TextStyle(
                                   decoration: TextDecoration.underline,
                                   decorationThickness: 1.5,
                                 ),
                                 recognizer: TapGestureRecognizer()
-                                  ..onTap = _showLegalDialog,
+                                  ..onTap = () => _openLink(termsUrl),
                               ),
-                              const TextSpan(text: '.'),
+                              TextSpan(
+                                text: AppText.t(
+                                  'welcome.legalAnd',
+                                  fallback: ' und ',
+                                ),
+                              ),
+                              TextSpan(
+                                text: AppText.t(
+                                  'welcome.legalPrivacy',
+                                  fallback: 'Datenschutzerklärung',
+                                ),
+                                style: const TextStyle(
+                                  decoration: TextDecoration.underline,
+                                  decorationThickness: 1.5,
+                                ),
+                                recognizer: TapGestureRecognizer()
+                                  ..onTap = () => _openLink(privacyUrl),
+                              ),
+                              TextSpan(
+                                text: AppText.t(
+                                  'welcome.legalSuffix',
+                                  fallback: '.',
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -287,8 +327,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         ElevatedButton(
                           onPressed: _onStartPressed,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: orange,
+                            backgroundColor: appTheme.buttonColor,
+                            foregroundColor: appTheme.buttonTextColor,
                             elevation: 6,
                             minimumSize: Size(double.infinity, vh(50)),
                             shape: RoundedRectangleBorder(
@@ -296,10 +336,13 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                             ),
                           ),
                           child: Text(
-                            'Jetzt starten',
-                            style: GoogleFonts.poppins(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
+                            AppText.t(
+                              'welcome.startButton',
+                              fallback: 'Jetzt starten',
+                            ),
+                            style: AppText.font(
+                              size: 18,
+                              weight: FontWeight.w600,
                             ),
                           ),
                         ),

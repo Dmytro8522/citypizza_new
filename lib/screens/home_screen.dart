@@ -30,6 +30,9 @@ import '../widgets/search_result_tile.dart';
 import '../services/app_config_service.dart' as cfg;
 import 'order_status_screen.dart';
 import '../services/delivery_zone_service.dart';
+import '../utils/app_text.dart';
+import '../services/restaurant_context.dart';
+import '../services/menu_visibility_service.dart';
 
 /// Модель MenuItem вынесена в ../models/menu_item.dart
 
@@ -44,6 +47,10 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static const _cachedMenuKey = 'cached_menu';
+  static const _cachedMenuTsKey = 'cached_menu_ts';
+  static const Duration _menuCacheTtl = Duration(minutes: 2);
+
   final SupabaseClient supabase = Supabase.instance.client;
   final TextEditingController _searchController = TextEditingController();
   bool _showSearch = false;
@@ -53,7 +60,12 @@ class _HomeScreenState extends State<HomeScreen> {
   // Для бейджа категории в результатах поиска
   final Map<int, int> _itemToCatId = {}; // itemId -> categoryId
   final Map<int, String> _categoryNames = {}; // categoryId -> name
-  final Map<int, PromotionPrice> _itemPromoSummary = {}; // itemId -> promo-aware summary
+  final Map<int, PromotionPrice> _itemPromoSummary =
+      {}; // itemId -> promo-aware summary
+  bool? _hasRecentOrdersSection;
+  bool? _hasDiscountsSection;
+  bool? _hasTopItemsSection;
+  bool? _hasBundlesSection;
   bool _loading = true;
   String? _error;
   int _tabIndex = 0;
@@ -112,7 +124,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final postal = prefs.getString('user_postal_code');
     if (postal == null || postal.isEmpty) return; // дождёмся ввода
-    final minOrder = await DeliveryZoneService.getMinOrderForPostal(postalCode: postal);
+    final minOrder =
+        await DeliveryZoneService.getMinOrderForPostal(postalCode: postal);
     setState(() => _minOrderAmountHome = minOrder);
     await _computeDiscountedCartTotal();
   }
@@ -131,7 +144,12 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _computingCartTotal = true);
     try {
       final itemIds = items.map((e) => e.itemId).toSet().toList();
-      final sizeIds = items.map((e) => e.sizeId).where((e) => e != null).cast<int>().toSet().toList();
+      final sizeIds = items
+          .map((e) => e.sizeId)
+          .where((e) => e != null)
+          .cast<int>()
+          .toSet()
+          .toList();
       final extraIds = <int>{};
       for (final it in items) {
         extraIds.addAll(it.extras.keys);
@@ -143,13 +161,14 @@ class _HomeScreenState extends State<HomeScreen> {
         final rows = await supabase
             .from('menu_v2_extra_price_by_size')
             .select('size_id, extra_id, price')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('extra_id', 'in', extraIds.toList())
             .filter('size_id', 'in', sizeIds);
         for (final r in (rows as List).cast<Map<String, dynamic>>()) {
           final sid = (r['size_id'] as int?) ?? 0;
           final eid = (r['extra_id'] as int?) ?? 0;
-            final p = (r['price'] as num).toDouble();
-            extraPriceMap['$sid|$eid'] = p;
+          final p = (r['price'] as num).toDouble();
+          extraPriceMap['$sid|$eid'] = p;
         }
       }
 
@@ -159,6 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final catRows = await supabase
             .from('menu_v2_item')
             .select('id, category_id')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', itemIds);
         for (final r in (catRows as List).cast<Map<String, dynamic>>()) {
           final mid = (r['id'] as int?) ?? 0;
@@ -170,8 +190,10 @@ class _HomeScreenState extends State<HomeScreen> {
       // Группировка для скидок
       final grouped = <String, List<CartItem>>{};
       for (final it in items) {
-        final sigExtras = it.extras.entries.map((e) => '${e.key}:${e.value}').join(',');
-        final sigOpts = it.options.entries.map((e) => '${e.key}:${e.value}').join(',');
+        final sigExtras =
+            it.extras.entries.map((e) => '${e.key}:${e.value}').join(',');
+        final sigOpts =
+            it.options.entries.map((e) => '${e.key}:${e.value}').join(',');
         final key = '${it.itemId}|${it.size}|$sigExtras|$sigOpts';
         grouped.putIfAbsent(key, () => []).add(it);
       }
@@ -187,6 +209,15 @@ class _HomeScreenState extends State<HomeScreen> {
             unit += (extraPriceMap[key] ?? 0.0) * e.value;
           }
         }
+        final extraLineItems = first.extras.entries
+            .where((e) => e.value > 0)
+            .map((e) => {
+                  'id': e.key,
+                  'quantity': e.value,
+                  'unit_price':
+                      extraPriceMap['${first.sizeId}|${e.key}'] ?? 0.0,
+                })
+            .toList();
         // Опции без наценок — пропускаем
         final count = entry.value.length;
         rawSum += unit * count;
@@ -194,6 +225,15 @@ class _HomeScreenState extends State<HomeScreen> {
           'id': first.itemId,
           'category_id': itemIdToCategory[first.itemId],
           'size_id': first.sizeId,
+          'extra_ids': first.extras.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toList(),
+          'modifier_option_ids': first.options.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toList(),
+          'extra_line_items': extraLineItems,
           'price': unit,
           'quantity': count,
         });
@@ -201,7 +241,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
       DiscountResult? dres;
       try {
-        dres = await calculateDiscountedTotal(cartItems: cartList, subtotal: rawSum);
+        dres = await calculateDiscountedTotal(
+            cartItems: cartList, subtotal: rawSum);
       } catch (_) {}
       if (!mounted) return;
       setState(() {
@@ -216,7 +257,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   PreferredSizeWidget? _buildMinOrderBar() {
     if (!_showMinOrderBar) return null;
-    final remaining = (_minOrderAmountHome! - _discountedCartTotal).clamp(0, _minOrderAmountHome!);
+    final remaining = (_minOrderAmountHome! - _discountedCartTotal)
+        .clamp(0, _minOrderAmountHome!);
     return PreferredSize(
       preferredSize: const Size.fromHeight(24),
       child: Container(
@@ -224,14 +266,21 @@ class _HomeScreenState extends State<HomeScreen> {
         width: double.infinity,
         decoration: BoxDecoration(
           color: Colors.redAccent.withOpacity(0.12),
-          border: Border(top: BorderSide(color: Colors.redAccent.withOpacity(0.35), width: 0.8)),
+          border: Border(
+              top: BorderSide(
+                  color: Colors.redAccent.withOpacity(0.35), width: 0.8)),
         ),
         alignment: Alignment.center,
         child: _computingCartTotal
-            ? Text('Prüfe Mindestbestellwert…', style: GoogleFonts.poppins(color: Colors.redAccent, fontSize: 11))
+            ? Text('Prüfe Mindestbestellwert…',
+                style:
+                    GoogleFonts.poppins(color: Colors.redAccent, fontSize: 11))
             : Text(
                 'Noch €${remaining.toStringAsFixed(2)} bis Mindestbestellwert (€${_minOrderAmountHome!.toStringAsFixed(2)})',
-                style: GoogleFonts.poppins(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                style: GoogleFonts.poppins(
+                    color: Colors.redAccent,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600),
               ),
       ),
     );
@@ -247,7 +296,8 @@ class _HomeScreenState extends State<HomeScreen> {
             final d = (item.description ?? '').toLowerCase();
             return n.contains(query) || d.contains(query);
           }).toList();
-    base.sort((a, b) => _relevanceScore(b, query).compareTo(_relevanceScore(a, query)));
+    base.sort((a, b) =>
+        _relevanceScore(b, query).compareTo(_relevanceScore(a, query)));
     setState(() => _filteredItems = base);
   }
 
@@ -261,19 +311,29 @@ class _HomeScreenState extends State<HomeScreen> {
     final prefs = await SharedPreferences.getInstance();
 
     // ШАГ 1: Если не refresh и в кэше есть данные — показываем их сразу
-    if (!refresh && prefs.containsKey('cached_menu')) {
+    final cacheTs = prefs.getInt(_cachedMenuTsKey);
+    final hasFreshCache = cacheTs != null &&
+        DateTime.now()
+                .difference(DateTime.fromMillisecondsSinceEpoch(cacheTs)) <=
+            _menuCacheTtl;
+
+    if (!refresh && hasFreshCache && prefs.containsKey(_cachedMenuKey)) {
       try {
-        final cachedString = prefs.getString('cached_menu')!;
+        final cachedString = prefs.getString(_cachedMenuKey)!;
         final List decoded = json.decode(cachedString) as List;
+        final visibleDecoded = decoded
+            .cast<Map<String, dynamic>>()
+            .where(MenuVisibilityService.isVisibleEntity)
+            .toList();
         final cachedItems = decoded
             .map((e) => MenuItem.fromMap(e as Map<String, dynamic>))
+            .where((e) => e.isActive && !e.isDeleted)
             .toList();
         _itemToCatId
           ..clear()
-          ..addEntries(decoded.map((raw) {
-            final map = raw as Map<String, dynamic>;
-            final id = (map['id'] as int?) ?? 0;
-            final catId = (map['category_id'] as int?) ?? 0;
+          ..addEntries(visibleDecoded.map((raw) {
+            final id = (raw['id'] as int?) ?? 0;
+            final catId = (raw['category_id'] as int?) ?? 0;
             return MapEntry(id, catId);
           }).where((entry) => entry.key > 0 && entry.value > 0));
         _allItems = cachedItems;
@@ -299,6 +359,7 @@ class _HomeScreenState extends State<HomeScreen> {
             final priceRows = await supabase
                 .from('menu_v2_item_prices')
                 .select('item_id, price')
+                .eq('restaurant_id', RestaurantContext.current)
                 .filter('item_id', 'in', inList);
             final minMap = <int, double>{};
             for (final r in (priceRows as List)) {
@@ -329,7 +390,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   );
                 }
                 // Для одноразмерных с нулём тоже проставим singleSizePrice
-                if (!it.hasMultipleSizes && (it.minPrice <= 0) && it.singleSizePrice != null) {
+                if (!it.hasMultipleSizes &&
+                    (it.minPrice <= 0) &&
+                    it.singleSizePrice != null) {
                   return MenuItem(
                     id: it.id,
                     name: it.name,
@@ -350,13 +413,14 @@ class _HomeScreenState extends State<HomeScreen> {
               }).toList();
 
               // Переcобираем filtered под текущий режим
-              _filteredItems = _showSearch && _searchController.text.trim().isNotEmpty
-                  ? _allItems
-                      .where((item) => item.name
-                          .toLowerCase()
-                          .contains(_searchController.text.toLowerCase()))
-                      .toList()
-                  : List.from(_allItems);
+              _filteredItems =
+                  _showSearch && _searchController.text.trim().isNotEmpty
+                      ? _allItems
+                          .where((item) => item.name
+                              .toLowerCase()
+                              .contains(_searchController.text.toLowerCase()))
+                          .toList()
+                      : List.from(_allItems);
 
               if (mounted) setState(() {});
 
@@ -378,7 +442,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 }
                 return m;
               }).toList();
-              await prefs.setString('cached_menu', json.encode(updatedJson));
+              await prefs.setString(_cachedMenuKey, json.encode(updatedJson));
+              await prefs.setInt(
+                  _cachedMenuTsKey, DateTime.now().millisecondsSinceEpoch);
             }
           } catch (_) {
             // Тихо игнорируем: покажем как есть, сеть ещё обновит на шаге 2
@@ -391,13 +457,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // ШАГ 2: Пробуем получить актуальные данные с Supabase
     try {
-    final data = await supabase
-      .from('menu_v2_item')
-      .select('id,category_id,name,description,image_url,sku,has_sizes,is_active,is_available')
+      final data = await supabase
+          .from('menu_v2_item')
+          .select(
+              'id,category_id,name,description,image_url,sku,has_sizes,is_active,is_available')
+          .eq('restaurant_id', RestaurantContext.current)
           .order('id', ascending: true);
 
       // Преобразуем список в удобный вид и вычислим minPrice как в MenuScreen
-      final rawItems = (data as List).cast<Map<String, dynamic>>();
+      final rawItems = (data as List)
+          .cast<Map<String, dynamic>>()
+          .where(MenuVisibilityService.isVisibleEntity)
+          .toList();
 
       // Соберём id позиций и карту категорий
       _itemToCatId.clear();
@@ -419,16 +490,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // подтянем имена категорий для бейджа (v2), только активные
       try {
+        final usedCategoryIds = itemToCategory.values.toSet();
+        _categoryNames.clear();
         final cats = await supabase
             .from('menu_v2_category')
-            .select('id,name')
-            .eq('is_active', true)
+            .select('id,name,is_active')
+            .eq('restaurant_id', RestaurantContext.current)
             .order('sort_order', ascending: true)
             .order('id', ascending: true);
         for (final c in (cats as List)) {
           final cid = (c['id'] as int?) ?? 0;
           final name = (c['name'] as String?) ?? '';
-          if (cid > 0) _categoryNames[cid] = name;
+          final visible =
+              MenuVisibilityService.isVisibleEntity(c as Map<String, dynamic>);
+          if (visible && cid > 0 && usedCategoryIds.contains(cid)) {
+            _categoryNames[cid] = name;
+          }
         }
       } catch (_) {}
 
@@ -440,6 +517,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final prices = await supabase
             .from('menu_v2_item_prices')
             .select('item_id, size_id, price')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('item_id', 'in', inList);
         for (final row in (prices as List)) {
           final mid = (row['item_id'] as int?) ?? 0;
@@ -459,6 +537,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return {
           ...m,
           'minPrice': minP,
+          'is_active': m['is_active'] as bool? ?? true,
+          'is_deleted': m['is_deleted'] as bool? ?? false,
           // адаптация полей к старой модели
           'has_multiple_sizes': hm,
           'single_size_price': hm ? null : (minP > 0 ? minP : null),
@@ -467,9 +547,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }).toList();
 
       // Преобразуем в объекты MenuItem уже с minPrice
-      final itemsFromServer = enriched
-          .map((e) => MenuItem.fromMap(e))
-          .toList();
+      final itemsFromServer = enriched.map((e) => MenuItem.fromMap(e)).toList();
 
       _allItems = itemsFromServer;
       _filteredItems = List.from(_allItems);
@@ -485,7 +563,9 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
       // ШАГ 3: Обновляем кэш в SharedPreferences готовыми enriched-данными (с minPrice)
-      await prefs.setString('cached_menu', json.encode(enriched));
+      await prefs.setString(_cachedMenuKey, json.encode(enriched));
+      await prefs.setInt(
+          _cachedMenuTsKey, DateTime.now().millisecondsSinceEpoch);
     } on SocketException {
       // Если нет интернета
       _error = 'Нет подключения к интернету';
@@ -552,6 +632,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final fetched = await supabase
             .from('menu_v2_item_prices')
             .select('item_id, size_id, price')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('item_id', 'in', inList);
         for (final raw in (fetched as List)) {
           final row = raw as Map<String, dynamic>;
@@ -628,14 +709,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadCurrentOrderBanner() async {
     try {
-  final visibleMin = await cfg.AppConfigService.get<int>('current_order_widget_minutes', defaultValue: 60);
-  final etaMin = await cfg.AppConfigService.get<int>('default_eta_minutes', defaultValue: 45);
+      final visibleMin = await cfg.AppConfigService.get<int>(
+          'current_order_widget_minutes',
+          defaultValue: 60);
+      final etaMin = await cfg.AppConfigService.get<int>('default_eta_minutes',
+          defaultValue: 45);
       Map<String, dynamic>? row;
       final user = supabase.auth.currentUser;
       if (user != null) {
         final rows = await supabase
             .from('orders')
             .select('id, created_at, status, is_delivery, scheduled_time')
+            .eq('restaurant_id', RestaurantContext.current)
             .eq('user_id', user.id)
             .order('created_at', ascending: false)
             .limit(1);
@@ -651,6 +736,7 @@ class _HomeScreenState extends State<HomeScreen> {
           final ord = await supabase
               .from('orders')
               .select('id, created_at, status, is_delivery, scheduled_time')
+              .eq('restaurant_id', RestaurantContext.current)
               .eq('id', lastId)
               .maybeSingle();
           if (ord != null) {
@@ -669,7 +755,11 @@ class _HomeScreenState extends State<HomeScreen> {
               final id = (snap['id'] as int?) ?? prefs.getInt('last_order_id');
               final createdStr = (snap['created_at_local'] as String?);
               DateTime? createdAt;
-              if (createdStr != null) { try { createdAt = DateTime.parse(createdStr); } catch (_) {} }
+              if (createdStr != null) {
+                try {
+                  createdAt = DateTime.parse(createdStr);
+                } catch (_) {}
+              }
               bool within = true;
               if (createdAt != null) {
                 final expiry = createdAt.add(Duration(minutes: visibleMin));
@@ -680,18 +770,29 @@ class _HomeScreenState extends State<HomeScreen> {
                 final exists = await supabase
                     .from('orders')
                     .select('id')
+                    .eq('restaurant_id', RestaurantContext.current)
                     .eq('id', id)
                     .maybeSingle();
                 if (exists == null) {
                   await prefs.remove('last_order_snapshot');
                   await prefs.remove('last_order_id');
-                  if (mounted) setState(() { _bannerVisible = false; });
+                  if (mounted)
+                    setState(() {
+                      _bannerVisible = false;
+                    });
                   return;
                 }
                 DateTime? eta;
                 final schedStr = (snap['scheduled_time'] as String?);
-                if (schedStr != null) { try { eta = DateTime.parse(schedStr); } catch (_) {} }
-                eta ??= (createdAt ?? DateTime.now()).add(Duration(minutes: etaMin));
+                if (schedStr != null) {
+                  try {
+                    eta = DateTime.parse(schedStr)
+                        .toLocal(); // Конвертация в локальное время
+                  } catch (_) {}
+                }
+                eta ??= ((createdAt ?? DateTime.now())
+                        .add(Duration(minutes: etaMin)))
+                    .toLocal(); // Конвертация в локальное время
                 if (mounted) {
                   setState(() {
                     _bannerOrderId = id;
@@ -699,34 +800,52 @@ class _HomeScreenState extends State<HomeScreen> {
                     _bannerEta = eta;
                     _bannerVisible = _bannerOrderId != null;
                   });
-                  if (_bannerOrderId != null) _bindRealtimeForOrder(_bannerOrderId!);
+                  if (_bannerOrderId != null)
+                    _bindRealtimeForOrder(_bannerOrderId!);
                 }
                 return;
               }
             }
           }
         } catch (_) {}
-        if (mounted) setState(() { _bannerVisible = false; });
+        if (mounted)
+          setState(() {
+            _bannerVisible = false;
+          });
         return;
       }
-      
+
       final id = (row['id'] as int?) ?? 0;
       final createdStr = row['created_at']?.toString();
-      DateTime? createdAt; if (createdStr != null) { try { createdAt = DateTime.parse(createdStr); } catch (_) {} }
+      DateTime? createdAt;
+      if (createdStr != null) {
+        try {
+          createdAt = DateTime.parse(createdStr);
+        } catch (_) {}
+      }
+      // Окно видимости через UTC, как в OrderStatusScreen
       bool within = true;
       if (createdAt != null) {
         final expiry = createdAt.add(Duration(minutes: visibleMin));
         within = DateTime.now().toUtc().isBefore(expiry.toUtc());
       }
       if (!within) {
-        if (mounted) setState(() { _bannerVisible = false; });
+        if (mounted)
+          setState(() {
+            _bannerVisible = false;
+          });
         return;
       }
-      // ETA
-  DateTime? eta;
+      // ETA (как на OrderStatusScreen)
+      DateTime? eta;
       final schedStr = row['scheduled_time']?.toString();
-      if (schedStr != null) { try { eta = DateTime.parse(schedStr); } catch (_) {} }
-  eta ??= (createdAt ?? DateTime.now()).add(Duration(minutes: etaMin));
+      if (schedStr != null) {
+        try {
+          eta = DateTime.parse(schedStr).toLocal();
+        } catch (_) {}
+      }
+      eta ??= ((createdAt ?? DateTime.now()).add(Duration(minutes: etaMin)))
+          .toLocal();
       final status = (row['status'] as String?) ?? 'eingegangen';
 
       if (mounted) {
@@ -739,7 +858,10 @@ class _HomeScreenState extends State<HomeScreen> {
         _bindRealtimeForOrder(id);
       }
     } catch (_) {
-      if (mounted) setState(() { _bannerVisible = false; });
+      if (mounted)
+        setState(() {
+          _bannerVisible = false;
+        });
     }
   }
 
@@ -753,7 +875,10 @@ class _HomeScreenState extends State<HomeScreen> {
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'orders',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'id', value: id.toString()),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'id',
+              value: id.toString()),
           callback: (payload) async {
             // Обновим баннер по актуальным данным
             await _loadCurrentOrderBanner();
@@ -764,7 +889,10 @@ class _HomeScreenState extends State<HomeScreen> {
           event: PostgresChangeEvent.delete,
           schema: 'public',
           table: 'orders',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'id', value: id.toString()),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'id',
+              value: id.toString()),
           callback: (payload) async {
             try {
               final prefs = await SharedPreferences.getInstance();
@@ -838,19 +966,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // Название AppBar по текущему табу
     final title = _tabIndex == 0
-        ? 'City Pizza Service'
+        ? AppText.t('appBarTitles.home', fallback: 'Home')
         : _tabIndex == 1
-            ? 'Menü'
-            : 'Profil';
+            ? AppText.t('appBarTitles.menu', fallback: 'Menü')
+            : AppText.t('appBarTitles.profile', fallback: 'Profil');
+    final titleKey = _tabIndex == 0
+        ? 'appBarTitles.home'
+        : _tabIndex == 1
+            ? 'appBarTitles.menu'
+            : 'appBarTitles.profile';
 
     // Определяем, какой контент показывать внутри body
     Widget bodyContent;
     if (_loading) {
-      bodyContent = const Center(child: CircularProgressIndicator(color: Colors.orange));
+      bodyContent =
+          const Center(child: CircularProgressIndicator(color: Colors.orange));
     } else if (_error != null) {
       bodyContent = NoInternetWidget(
         onRetry: () => _loadMenu(refresh: true),
-        errorText: _error == 'Нет подключения к интернету' ? 'Keine Internetverbindung' : _error,
+        errorText: _error == 'Нет подключения к интернету'
+            ? 'Keine Internetverbindung'
+            : _error,
       );
     } else {
       if (_tabIndex == 0) {
@@ -870,7 +1006,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     prefixIcon: const Icon(Icons.search, color: Colors.white54),
                     filled: true,
                     fillColor: Colors.white10,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                    contentPadding:
+                        const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(30),
                       borderSide: BorderSide.none,
@@ -900,11 +1037,14 @@ class _HomeScreenState extends State<HomeScreen> {
                             priceInfo: _itemPromoSummary[item.id],
                             onTap: () {
                               final lowerName = item.name.toLowerCase();
-                              final isBundle = lowerName.contains('bundle') || lowerName.contains('menü');
+                              final isBundle = lowerName.contains('bundle') ||
+                                  lowerName.contains('menü');
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => isBundle ? BundleDetailScreen(bundleId: item.id) : MenuItemDetailScreen(item: item),
+                                  builder: (_) => isBundle
+                                      ? BundleDetailScreen(bundleId: item.id)
+                                      : MenuItemDetailScreen(item: item),
                                 ),
                               ).then((_) {
                                 if (!mounted) return;
@@ -933,14 +1073,20 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: appTheme.backgroundColor,
       appBar: _tabIndex == 0
           // Если мы на главной вкладке — рисуем кастомный AppBar с возможностью поиска и корзиной
-            ? AppBar(
-              backgroundColor: appTheme.backgroundColor,
+          ? AppBar(
+              backgroundColor: cfg.AppConfigService.color(
+                'theme.appBarBackground',
+                fallback: appTheme.backgroundColor,
+              ),
               elevation: 0,
               centerTitle: true,
               leading: IconButton(
                 icon: Icon(
                   _showSearch ? Icons.close : Icons.search,
-                  color: appTheme.iconColor,
+                  color: cfg.AppConfigService.color(
+                    'theme.appBarIconColor',
+                    fallback: appTheme.iconColor,
+                  ),
                 ),
                 onPressed: () {
                   setState(() {
@@ -953,7 +1099,10 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               title: Text(title),
               titleTextStyle: GoogleFonts.fredokaOne(
-                color: appTheme.primaryColor,
+                color: cfg.AppConfigService.color(
+                  'theme.appBarTitleColor',
+                  fallback: appTheme.primaryColor,
+                ),
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
               ),
@@ -965,7 +1114,13 @@ class _HomeScreenState extends State<HomeScreen> {
                     return Stack(
                       children: [
                         IconButton(
-                          icon: Icon(Icons.shopping_cart, color: appTheme.iconColor),
+                          icon: Icon(
+                            Icons.shopping_cart,
+                            color: cfg.AppConfigService.color(
+                              'theme.appBarIconColor',
+                              fallback: appTheme.iconColor,
+                            ),
+                          ),
                           onPressed: _goToCart,
                         ),
                         if (cartCount > 0)
@@ -978,10 +1133,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 color: Colors.red,
                                 shape: BoxShape.circle,
                               ),
-                              constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                              constraints: const BoxConstraints(
+                                  minWidth: 16, minHeight: 16),
                               child: Text(
                                 '$cartCount',
-                                style: const TextStyle(color: Colors.white, fontSize: 10),
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 10),
                                 textAlign: TextAlign.center,
                               ),
                             ),
@@ -994,7 +1151,11 @@ class _HomeScreenState extends State<HomeScreen> {
               bottom: _buildMinOrderBar(),
             )
           // В остальных случаях (Меню/Профиль) используем общий AppBar
-          : buildCommonAppBar(title: title, context: context),
+          : buildCommonAppBar(
+              title: title,
+              titleKey: titleKey,
+              context: context,
+            ),
       body: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: bodyContent,
@@ -1003,9 +1164,14 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Вспомогательный метод: строит содержимое вкладки «Главная» 
+  /// Вспомогательный метод: строит содержимое вкладки «Главная»
   /// с основными секциями: CTA, недавние заказы, скидки, топ-позиции
   Widget _buildHomeTab() {
+    final showMenuFallback = _hasRecentOrdersSection == false &&
+        _hasDiscountsSection == false &&
+        _hasTopItemsSection == false &&
+        _hasBundlesSection == false;
+
     return ListView(
       clipBehavior: Clip.none,
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
@@ -1024,18 +1190,35 @@ class _HomeScreenState extends State<HomeScreen> {
           },
         ),
         const SizedBox(height: 24),
-        const RecentOrdersSection(),
+        RecentOrdersSection(
+          onAvailabilityChanged: (has) {
+            if (!mounted) return;
+            setState(() => _hasRecentOrdersSection = has);
+          },
+        ),
         const SizedBox(height: 12),
-        const DiscountListWidget(),
+        DiscountListWidget(
+          onAvailabilityChanged: (has) {
+            if (!mounted) return;
+            setState(() => _hasDiscountsSection = has);
+          },
+        ),
         const SizedBox(height: 12),
         TopItemsSection(
+          onAvailabilityChanged: (has) {
+            if (!mounted) return;
+            setState(() => _hasTopItemsSection = has);
+          },
           onTap: (item) {
             final lowerName = item.name.toLowerCase();
-            final isBundle = lowerName.contains('bundle') || lowerName.contains('menü');
+            final isBundle =
+                lowerName.contains('bundle') || lowerName.contains('menü');
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => isBundle ? BundleDetailScreen(bundleId: item.id) : MenuItemDetailScreen(item: item),
+                builder: (_) => isBundle
+                    ? BundleDetailScreen(bundleId: item.id)
+                    : MenuItemDetailScreen(item: item),
               ),
             ).then((_) {
               if (!mounted) return;
@@ -1044,8 +1227,92 @@ class _HomeScreenState extends State<HomeScreen> {
           },
         ),
         const SizedBox(height: 12),
-        const BundlesSection(),
+        BundlesSection(
+          onAvailabilityChanged: (has) {
+            if (!mounted) return;
+            setState(() => _hasBundlesSection = has);
+          },
+        ),
+        if (showMenuFallback) ...[
+          const SizedBox(height: 8),
+          _buildHomeMenuFallback(),
+        ],
       ],
+    );
+  }
+
+  Widget _buildHomeMenuFallback() {
+    final appTheme = ThemeProvider.of(context);
+    final previewItems = _allItems.take(6).toList();
+
+    if (previewItems.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: appTheme.cardColor.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.restaurant_menu, color: appTheme.primaryColor),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Menü entdecken',
+                  style: GoogleFonts.poppins(
+                    color: appTheme.textColor,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: () => setState(() => _tabIndex = 1),
+                child: Text(
+                  'Alles',
+                  style: GoogleFonts.poppins(
+                    color: appTheme.primaryColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...previewItems.map((item) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: SearchResultTile(
+                  item: item,
+                  query: '',
+                  categoryName: _categoryNameFor(item.id),
+                  priceInfo: _itemPromoSummary[item.id],
+                  onTap: () {
+                    final lowerName = item.name.toLowerCase();
+                    final isBundle = lowerName.contains('bundle') ||
+                        lowerName.contains('menü');
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => isBundle
+                            ? BundleDetailScreen(bundleId: item.id)
+                            : MenuItemDetailScreen(item: item),
+                      ),
+                    ).then((_) {
+                      if (!mounted) return;
+                      setState(() {});
+                    });
+                  },
+                ),
+              )),
+        ],
+      ),
     );
   }
 
@@ -1053,16 +1320,23 @@ class _HomeScreenState extends State<HomeScreen> {
     final appTheme = ThemeProvider.of(context);
     String statusLabel;
     switch ((_bannerStatus ?? '').toLowerCase()) {
-      case 'preparing': statusLabel = 'In Vorbereitung'; break;
-      case 'on_the_way': statusLabel = 'Unterwegs'; break;
-      case 'delivered': statusLabel = 'Zugestellt'; break;
-      default: statusLabel = 'Eingegangen';
+      case 'preparing':
+        statusLabel = 'In Vorbereitung';
+        break;
+      case 'on_the_way':
+        statusLabel = 'Unterwegs';
+        break;
+      case 'delivered':
+        statusLabel = 'Zugestellt';
+        break;
+      default:
+        statusLabel = 'Eingegangen';
     }
+    String _pad(int v) => v < 10 ? '0$v' : '$v';
+    String _formatTime(DateTime t) => _pad(t.hour) + ':' + _pad(t.minute);
     String etaText = '';
     if (_bannerEta != null) {
-      final h = _bannerEta!.hour.toString().padLeft(2, '0');
-      final m = _bannerEta!.minute.toString().padLeft(2, '0');
-      etaText = 'Bis ca. $h:$m';
+      etaText = 'Bis ca. ${_formatTime(_bannerEta!)}';
     }
     return Card(
       color: appTheme.cardColor,
@@ -1074,7 +1348,8 @@ class _HomeScreenState extends State<HomeScreen> {
           if (_bannerOrderId != null) {
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => OrderStatusScreen(orderId: _bannerOrderId!)),
+              MaterialPageRoute(
+                  builder: (_) => OrderStatusScreen(orderId: _bannerOrderId!)),
             );
           }
         },
@@ -1088,10 +1363,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Aktuelle Bestellung', style: GoogleFonts.poppins(color: appTheme.textColor, fontWeight: FontWeight.w600)),
+                    Text('Aktuelle Bestellung',
+                        style: GoogleFonts.poppins(
+                            color: appTheme.textColor,
+                            fontWeight: FontWeight.w600)),
                     const SizedBox(height: 2),
-                    Text('#$_bannerOrderId • $statusLabel${etaText.isNotEmpty ? ' • $etaText' : ''}',
-                        style: GoogleFonts.poppins(color: appTheme.textColorSecondary, fontSize: 12)),
+                    Text(
+                        '#$_bannerOrderId • $statusLabel${etaText.isNotEmpty ? ' • $etaText' : ''}',
+                        style: GoogleFonts.poppins(
+                            color: appTheme.textColorSecondary, fontSize: 12)),
                   ],
                 ),
               ),
@@ -1103,7 +1383,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-
 }
 
 /// Плитка результата поиска: без изображения, компактная, как на экране Меню

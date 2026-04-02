@@ -10,6 +10,8 @@ import '../services/delivery_zone_service.dart';
 import '../services/discount_service.dart';
 import '../services/cart_service.dart';
 import '../utils/globals.dart';
+import '../services/restaurant_context.dart';
+import '../services/menu_visibility_service.dart';
 
 class BundleDetailScreen extends StatefulWidget {
   final int bundleId;
@@ -23,6 +25,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
   final _supabase = Supabase.instance.client;
   bool _loading = true;
   String? _error;
+  bool _bundleUnavailable = false;
 
   // Bundle core
   String _bundleName = '';
@@ -59,6 +62,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
       final row = await _supabase
           .from('menu_size')
           .select('id, name')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('id', sizeId)
           .maybeSingle();
       if (row != null) {
@@ -91,19 +95,28 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
       final results = await Future.wait([
         _supabase
             .from('menu_v2_bundle')
-            .select('id, name, description, price')
+            .select('id, name, description, price, is_active')
+            .eq('restaurant_id', RestaurantContext.current)
             .eq('id', widget.bundleId)
             .maybeSingle(),
         _supabase
             .from('menu_v2_bundle_slot')
             .select(
                 'id, name, min_qty, max_qty, allow_paid_upgrade, sort_order')
+            .eq('restaurant_id', RestaurantContext.current)
             .eq('bundle_id', widget.bundleId)
             .order('sort_order', ascending: true),
       ]);
 
       final bRow = results[0] as Map<String, dynamic>?;
       if (bRow == null) throw Exception('Bundle nicht gefunden');
+      if (!MenuVisibilityService.isVisibleEntity(bRow)) {
+        setState(() {
+          _bundleUnavailable = true;
+          _loading = false;
+        });
+        return;
+      }
       _bundleName = (bRow['name'] as String?) ?? '';
       _bundleDesc = (bRow['description'] as String?)?.trim();
       _bundlePrice = (bRow['price'] as num?)?.toDouble() ?? 0.0;
@@ -184,6 +197,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
         final rows = await supabase
             .from('menu_v2_extra_price_by_size')
             .select('size_id, extra_id, price')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('extra_id', 'in', extraIds.toList())
             .filter('size_id', 'in', sizeIds);
         for (final r in (rows as List).cast<Map<String, dynamic>>()) {
@@ -198,6 +212,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
         final catRows = await supabase
             .from('menu_v2_item')
             .select('id, category_id')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', itemIds);
         for (final r in (catRows as List).cast<Map<String, dynamic>>()) {
           final mid = (r['id'] as int?) ?? 0;
@@ -222,12 +237,30 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
         for (final e in first.extras.entries) {
           unit += (extraPriceMap['${first.sizeId}|${e.key}'] ?? 0.0) * e.value;
         }
+        final extraLineItems = first.extras.entries
+            .where((e) => e.value > 0)
+            .map((e) => {
+                  'id': e.key,
+                  'quantity': e.value,
+                  'unit_price':
+                      extraPriceMap['${first.sizeId}|${e.key}'] ?? 0.0,
+                })
+            .toList();
         final count = entry.value.length;
         rawSum += unit * count;
         cartList.add({
           'id': first.itemId,
           'category_id': itemIdToCategory[first.itemId],
           'size_id': first.sizeId,
+          'extra_ids': first.extras.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toList(),
+          'modifier_option_ids': first.options.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toList(),
+          'extra_line_items': extraLineItems,
           'price': unit,
           'quantity': count,
         });
@@ -254,6 +287,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
       final aRows = await _supabase
           .from('menu_v2_bundle_slot_allowed')
           .select('slot_id, include_type, category_id, item_id, size_id')
+          .eq('restaurant_id', RestaurantContext.current)
           .filter('slot_id', 'in', '(${slotIds.join(',')})');
       final allowedList = (aRows as List).cast<Map<String, dynamic>>();
 
@@ -274,20 +308,27 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
         if (directItemIds.isEmpty) return [];
         final res = await _supabase
             .from('menu_v2_item')
-            .select('id, name, category_id')
+            .select('id, name, category_id, is_active')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', '(${directItemIds.join(',')})');
-        return (res as List).cast<Map<String, dynamic>>();
+        return (res as List)
+            .cast<Map<String, dynamic>>()
+            .where(MenuVisibilityService.isVisibleEntity)
+            .toList();
       }
 
       Future<List<Map<String, dynamic>>> fetchItemsByCategories() async {
         if (categoryIds.isEmpty) return [];
         final res = await _supabase
             .from('menu_v2_item')
-            .select('id, name, category_id')
+            .select('id, name, category_id, is_active')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('category_id', 'in', '(${categoryIds.join(',')})')
-            .eq('is_active', true)
             .order('name');
-        return (res as List).cast<Map<String, dynamic>>();
+        return (res as List)
+            .cast<Map<String, dynamic>>()
+            .where(MenuVisibilityService.isVisibleEntity)
+            .toList();
       }
 
       final results = await Future.wait([
@@ -321,6 +362,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
       final policyRows = await _supabase
           .from('menu_v2_bundle_slot_extra_policy')
           .select('slot_id, included_extras_count, allow_paid_extras')
+          .eq('restaurant_id', RestaurantContext.current)
           .filter('slot_id', 'in', '(${slotIds.join(',')})');
       final Map<int, Map<String, dynamic>> policyBySlot = {
         for (final m in (policyRows as List).cast<Map<String, dynamic>>())
@@ -331,6 +373,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
       final smgRows = await _supabase
           .from('menu_v2_bundle_slot_modifier_group')
           .select('slot_id, group_id, sort_order')
+          .eq('restaurant_id', RestaurantContext.current)
           .filter('slot_id', 'in', '(${slotIds.join(',')})')
           .order('sort_order');
       final smgList = (smgRows as List).cast<Map<String, dynamic>>();
@@ -345,15 +388,23 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
       if (groupIds.isNotEmpty) {
         final gRows = await _supabase
             .from('menu_v2_modifier_group')
-            .select('id, name, min_select, max_select, sort_order')
+            .select('id, name, min_select, max_select, sort_order, is_active')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', '(${groupIds.join(',')})');
-        groupsList = (gRows as List).cast<Map<String, dynamic>>();
+        groupsList = (gRows as List)
+            .cast<Map<String, dynamic>>()
+            .where(MenuVisibilityService.isVisibleEntity)
+            .toList();
         final oRows = await _supabase
             .from('menu_v2_modifier_option')
-            .select('id, group_id, name, sort_order')
+            .select('id, group_id, name, sort_order, is_active')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('group_id', 'in', '(${groupIds.join(',')})')
             .order('sort_order');
-        optionsList = (oRows as List).cast<Map<String, dynamic>>();
+        optionsList = (oRows as List)
+            .cast<Map<String, dynamic>>()
+            .where(MenuVisibilityService.isVisibleEntity)
+            .toList();
       }
       final Map<int, Map<String, dynamic>> groupById = {
         for (final g in groupsList) (g['id'] as int): g,
@@ -455,6 +506,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
         final szRows = await _supabase
             .from('menu_size')
             .select('id, name')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', '(${sizeIdsToFetch.join(',')})');
         final map = <int, String>{};
         for (final r in (szRows as List).cast<Map<String, dynamic>>()) {
@@ -706,6 +758,22 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
 
   Future<void> _addToCart() async {
     if (!_isValid) return;
+    final visible =
+        await MenuVisibilityService.isBundleVisible(widget.bundleId);
+    if (!visible) {
+      if (!mounted) return;
+      setState(() => _bundleUnavailable = true);
+      await MenuVisibilityService.logMenuItemUnavailable(
+        itemId: widget.bundleId,
+        reason: 'hidden',
+        source: 'bundle_add_to_cart',
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Dieser Artikel ist nicht mehr verfügbar.')),
+      );
+      return;
+    }
     // Compose meta
     final metaSlots = <Map<String, dynamic>>[];
     for (final s in _slots) {
@@ -957,6 +1025,35 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
               : null,
         ),
         body: NoInternetWidget(onRetry: _load, errorText: _error),
+      );
+    }
+    if (_bundleUnavailable) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Bundle')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Товар недоступен',
+                  style: GoogleFonts.poppins(
+                    color: appTheme.textColor,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  onPressed: () =>
+                      Navigator.of(context).pushReplacementNamed('tab_1'),
+                  child: const Text('Вернуться в меню'),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
     return Scaffold(
@@ -1257,6 +1354,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     final rows = await _supabase
         .from('menu_v2_extra_price_by_size')
         .select('extra_id, size_id, price')
+        .eq('restaurant_id', RestaurantContext.current)
         .eq('size_id', sizeId)
         .filter('extra_id', 'in', '(${missing.join(',')})');
     for (final m in (rows as List).cast<Map<String, dynamic>>()) {
@@ -1271,6 +1369,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     final eItemRows = await _supabase
         .from('menu_v2_item_allowed_extras')
         .select('extra_id')
+        .eq('restaurant_id', RestaurantContext.current)
         .eq('item_id', item.itemId);
     List<int> extraIds =
         (eItemRows as List?)?.map((m) => m['extra_id'] as int).toList() ?? [];
@@ -1278,6 +1377,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
       final eCatRows = await _supabase
           .from('menu_v2_category_allowed_extras')
           .select('extra_id')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('category_id', item.categoryId!);
       extraIds =
           (eCatRows as List?)?.map((m) => m['extra_id'] as int).toList() ?? [];
@@ -1286,6 +1386,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     final rows = await _supabase
         .from('menu_v2_extra')
         .select('id, name, is_active')
+        .eq('restaurant_id', RestaurantContext.current)
         .filter('id', 'in', '(${extraIds.join(',')})')
         .eq('is_active', true)
         .order('name');

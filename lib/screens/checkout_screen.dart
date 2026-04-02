@@ -16,6 +16,7 @@ import '../services/upsell_service.dart';
 import '../services/discount_service.dart';
 import '../widgets/no_internet_widget.dart';
 import '../theme/theme_provider.dart';
+import '../services/restaurant_context.dart';
 import 'cart_screen.dart';
 import 'menu_item_detail_screen.dart';
 // import 'menu_screen.dart'; // Больше не используем прямой переход сюда после заказа
@@ -27,6 +28,7 @@ import 'dart:convert';
 import '../widgets/price_with_promotion.dart';
 import '../services/delivery_zone_service.dart';
 import '../utils/address_localization.dart';
+import '../services/menu_visibility_service.dart';
 
 // Removed unused _ExtraInfo helper
 
@@ -98,6 +100,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       final szRow = await Supabase.instance.client
           .from('menu_size')
           .select('id')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('name', sizeName)
           .maybeSingle();
       resolvedSizeId = szRow != null ? (szRow['id'] as int?) ?? 0 : null;
@@ -108,6 +111,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       final extraPriceRows = await Supabase.instance.client
           .from('menu_v2_extra_price_by_size')
           .select('extra_id, price')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('size_id', resolvedSizeId)
           .filter('extra_id', 'in', extrasMap.keys.toList());
       for (var row in extraPriceRows as List) {
@@ -120,6 +124,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final extraRows = await Supabase.instance.client
         .from('menu_v2_extra')
         .select('id, name')
+        .eq('restaurant_id', RestaurantContext.current)
         .filter('id', 'in', extrasMap.keys.toList());
     final nameMap = <int, String>{
       for (var row in extraRows as List)
@@ -141,6 +146,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final optRows = await Supabase.instance.client
         .from('menu_v2_modifier_option')
         .select('id, name')
+        .eq('restaurant_id', RestaurantContext.current)
         .filter('id', 'in', optionsMap.keys.toList());
     final list = (optRows as List).cast<Map<String, dynamic>>();
     return list.map((row) {
@@ -168,9 +174,23 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       // Важно: загружаем профиль после первого кадра, чтобы избежать конфликтов с контроллерами
       _loadUserProfileIfAuth();
       // Пересчитываем сумму корзины на всякий случай из актуального состояния CartService
-      _refreshCartTotal();
+      _sanitizeCartBeforeCheckout().then((_) => _refreshCartTotal());
       _prefillFromPrefs();
     });
+  }
+
+  Future<void> _sanitizeCartBeforeCheckout() async {
+    final result = await MenuVisibilityService.sanitizeCartHiddenEntities(
+      source: 'checkout_screen',
+    );
+    if (!mounted || !result.hasUnavailable) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Warenkorb aktualisiert: nicht verfügbare Artikel/Extras wurden entfernt.',
+        ),
+      ),
+    );
   }
 
   Future<void> _prefillFromPrefs() async {
@@ -249,6 +269,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       final rows = await Supabase.instance.client
           .from('menu_v2_extra_price_by_size')
           .select('size_id, extra_id, price')
+          .eq('restaurant_id', RestaurantContext.current)
           .filter('extra_id', 'in', extraIds.toList())
           .filter('size_id', 'in', sizeIds);
       for (final r in (rows as List).cast<Map<String, dynamic>>()) {
@@ -277,6 +298,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       final catRows = await Supabase.instance.client
           .from('menu_v2_item')
           .select('id, category_id')
+          .eq('restaurant_id', RestaurantContext.current)
           .filter('id', 'in', itemIds);
       for (final r in (catRows as List).cast<Map<String, dynamic>>()) {
         final mid = (r['id'] as int?) ?? 0;
@@ -330,10 +352,27 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         }
       }
       final categoryId = itemIdToCategory[first.itemId];
+      final extraLineItems = first.extras.entries
+          .where((e) => e.value > 0)
+          .map((e) => {
+                'id': e.key,
+                'quantity': e.value,
+                'unit_price': extraPriceMap['${first.sizeId}|${e.key}'] ?? 0.0,
+              })
+          .toList();
       cartList.add({
         'id': first.itemId,
         'category_id': categoryId,
         'size_id': first.sizeId,
+        'extra_ids': first.extras.entries
+            .where((e) => e.value > 0)
+            .map((e) => e.key)
+            .toList(),
+        'modifier_option_ids': first.options.entries
+            .where((e) => e.value > 0)
+            .map((e) => e.key)
+            .toList(),
+        'extra_line_items': extraLineItems,
         'price': unit,
         'quantity': count,
       });
@@ -343,6 +382,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         itemId: first.itemId,
         categoryId: categoryId,
         sizeId: first.sizeId,
+        selectedExtraIds: first.extras.entries
+            .where((e) => e.value > 0)
+            .map((e) => e.key)
+            .toSet(),
+        selectedModifierOptionIds: first.options.entries
+            .where((e) => e.value > 0)
+            .map((e) => e.key)
+            .toSet(),
+        selectedExtraLineItems: extraLineItems,
       );
     }
 
@@ -370,6 +418,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final userData = await supabase
         .from('user_data')
         .select('first_name, phone, city, street, house_number, postal_code')
+        .eq('restaurant_id', RestaurantContext.current)
         .eq('id', user.id)
         .maybeSingle();
 
@@ -431,14 +480,19 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                           .pop(); // исправлено
                       // Подгружаем полные данные о товаре
                       final supabase = Supabase.instance.client;
-                      final m = await supabase.from('menu_v2_item').select('''
+                      final m = await supabase
+                          .from('menu_v2_item')
+                          .select('''
                             id,
                             name,
                             description,
                             image_url,
                             sku,
                             has_sizes
-                          ''').eq('id', itemId).maybeSingle();
+                          ''')
+                          .eq('restaurant_id', RestaurantContext.current)
+                          .eq('id', itemId)
+                          .maybeSingle();
                       if (m == null) return;
                       // Определяем минимальную цену
                       final hasMulti = (m['has_sizes'] as bool?) ?? false;
@@ -446,6 +500,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       final List<Map<String, dynamic>> pr = await supabase
                           .from('menu_v2_item_size_price')
                           .select('price')
+                          .eq('restaurant_id', RestaurantContext.current)
                           .eq('item_id', itemId)
                           .eq('is_available', true)
                           .order('price', ascending: true)
@@ -589,6 +644,29 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   Future<void> _submit() async {
+    final sanitizeResult =
+        await MenuVisibilityService.sanitizeCartHiddenEntities(
+      source: 'checkout_submit',
+    );
+    if (sanitizeResult.hasUnavailable) {
+      await _refreshCartTotal();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Einige Positionen waren nicht mehr verfügbar und wurden aus dem Warenkorb entfernt. Bitte prüfen Sie die Bestellung erneut.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (CartService.items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ihr Warenkorb ist leer.')),
+      );
+      return;
+    }
+
     if (!_formKey.currentState!.validate()) return;
     // Проверка минимальной суммы для доставки
     if (_isDelivery && _minOrderAmount != null) {
@@ -689,7 +767,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     ),
                     const SizedBox(height: 12),
                     // Исправлено: передаем AppTheme вместо ThemeProvider
-                    _buildBenefitRow(Icons.cake, 'Geburtstagsrabatt', appTheme),
+                    // _buildBenefitRow(Icons.cake, 'Geburtstagsrabatt', appTheme),
                     _buildBenefitRow(
                         Icons.star, 'Exklusive Angebote', appTheme),
                     _buildBenefitRow(Icons.history, 'Bestellverlauf', appTheme),
@@ -785,6 +863,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         final optRows = await Supabase.instance.client
             .from('menu_v2_modifier_option')
             .select('id, name')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', '(${optionIds.join(',')})');
         for (final r in (optRows as List).cast<Map<String, dynamic>>()) {
           final id = (r['id'] as int?) ?? 0;
@@ -806,6 +885,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           final normalRow = await Supabase.instance.client
               .from('menu_size')
               .select('id')
+              .eq('restaurant_id', RestaurantContext.current)
               .eq('name', 'Normal')
               .maybeSingle();
           fallbackSizeId = (normalRow?['id'] as int?);
@@ -818,6 +898,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           final rows = await Supabase.instance.client
               .from('menu_v2_extra_price_by_size')
               .select('size_id, extra_id, price')
+              .eq('restaurant_id', RestaurantContext.current)
               .filter('size_id', 'in', '(${sizeSet.join(',')})')
               .filter('extra_id', 'in', '(${extraIds.join(',')})');
           for (final r in (rows as List).cast<Map<String, dynamic>>()) {
@@ -831,6 +912,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         final names = await Supabase.instance.client
             .from('menu_v2_extra')
             .select('id, name')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', '(${extraIds.join(',')})');
         for (final r in (names as List).cast<Map<String, dynamic>>()) {
           extraNameMap[(r['id'] as int?) ?? 0] = (r['name'] as String?) ?? '';

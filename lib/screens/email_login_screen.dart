@@ -125,7 +125,7 @@ class _EmailLoginScreenState extends State<EmailLoginScreen> {
                             await Supabase.instance.client.auth
                                 .resetPasswordForEmail(
                               email,
-                              redirectTo: 'citypizza://reset-password/',
+                              redirectTo: 'edspizzaservice://reset-password/',
                             );
                             if (!mounted) return;
                             Navigator.of(context).pop();

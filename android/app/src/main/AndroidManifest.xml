@@ -1,12 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.citypizza.order">
+    package="com.eds.appeds">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <application
-        android:label="City Pizza"
+        android:label="ED´s Pizzaservice - Waiblingen"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"

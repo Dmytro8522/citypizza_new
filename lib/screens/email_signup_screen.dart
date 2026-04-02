@@ -6,7 +6,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 
 import '../services/auth_service.dart';
-import 'home_screen.dart';
+// import removed: navigation now uses global navigatorKey to switch tabs
+import '../utils/globals.dart';
 
 class EmailSignupScreen extends StatefulWidget {
   final String? initialName;
@@ -148,11 +149,9 @@ class _EmailSignupScreenState extends State<EmailSignupScreen> {
           ),
         ),
       );
-      // После регистрации — переходим в HomeScreen на вкладку «Profil»
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const HomeScreen(initialIndex: 2)),
-        (route) => false,
-      );
+      // После регистрации — переключаемся на вкладку «Profil» через
+      // корневой Navigator, чтобы избежать вложенного экрана внутри экрана
+      navigatorKey.currentState?.pushReplacementNamed('tab_2');
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Fehler: $e')),

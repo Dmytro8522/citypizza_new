@@ -27,14 +27,16 @@ class DiscountSection extends StatelessWidget {
 }
 
 class DiscountListWidget extends StatefulWidget {
-  const DiscountListWidget({super.key});
+  final ValueChanged<bool>? onAvailabilityChanged;
+  const DiscountListWidget({super.key, this.onAvailabilityChanged});
 
   @override
   State<DiscountListWidget> createState() => _DiscountListWidgetState();
 }
 
 class _DiscountListWidgetState extends State<DiscountListWidget>
-    with TickerProviderStateMixin {  // <-- 변경 здесь
+    with TickerProviderStateMixin {
+  // <-- 변경 здесь
   final PageController _pageCtrl = PageController(viewportFraction: 0.9);
   Timer? _autoScrollTimer;
   List<Promotion> _promotions = [];
@@ -87,18 +89,21 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
         _promotions = promos;
         _loading = false;
       });
+      widget.onAvailabilityChanged?.call(promos.isNotEmpty);
     } on SocketException {
       if (!mounted) return;
       setState(() {
         _promotions = [];
         _loading = false;
       });
+      widget.onAvailabilityChanged?.call(false);
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _promotions = [];
         _loading = false;
       });
+      widget.onAvailabilityChanged?.call(false);
     }
   }
 
@@ -164,7 +169,9 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
 
   String _badgeLabel(Promotion promo) {
     final base = _formattedValue(promo);
-    return _isDiscountReduction(promo) ? 'Rabatt: -$base' : 'Aktionspreis: $base';
+    return _isDiscountReduction(promo)
+        ? 'Rabatt: -$base'
+        : 'Aktionspreis: $base';
   }
 
   String _detailValue(Promotion promo) {
@@ -186,13 +193,15 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
     const spacingAfterHeadline = 6.0;
     final spacingBeforePeriod = hasDescription ? 6.0 : 0.0;
 
-    final titleStyle = GoogleFonts.fredokaOne(color: Colors.white, fontSize: 17);
+    final titleStyle =
+        GoogleFonts.fredokaOne(color: Colors.white, fontSize: 17);
     final headlineStyle = GoogleFonts.fredokaOne(
       fontSize: 22,
       fontWeight: FontWeight.bold,
       color: Colors.white,
     );
-    final periodStyle = GoogleFonts.poppins(color: Colors.white54, fontSize: 11);
+    final periodStyle =
+        GoogleFonts.poppins(color: Colors.white54, fontSize: 11);
     final descStyle = GoogleFonts.poppins(color: Colors.white70, fontSize: 13);
 
     // Approximate widths: remove horizontal padding and a compact info icon area (~28 px)
@@ -224,14 +233,15 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
     )..layout();
 
     const verticalPadding = 24.0; // top + bottom padding inside the card
-    final effectiveHeight = constraints.maxHeight; // фактическая высота доступного контейнера
+    final effectiveHeight =
+        constraints.maxHeight; // фактическая высота доступного контейнера
     final usedHeight = titlePainter.height +
-      spacingAfterTitle +
-      headlinePainter.height +
-      spacingAfterHeadline +
-      spacingBeforePeriod +
-      periodPainter.height +
-      verticalPadding;
+        spacingAfterTitle +
+        headlinePainter.height +
+        spacingAfterHeadline +
+        spacingBeforePeriod +
+        periodPainter.height +
+        verticalPadding;
 
     final remaining = effectiveHeight - usedHeight;
     if (remaining <= 0) {
@@ -318,7 +328,8 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
     required int cardIndex,
     required int descLength,
   }) {
-    if (_overflowLogCount >= 8) return; // используем тот же лимит, чтобы не шуметь
+    if (_overflowLogCount >= 8)
+      return; // используем тот же лимит, чтобы не шуметь
     _overflowLogCount++;
     debugPrint(
       '📐 discount card metrics [$cardIndex]: rem=${remaining.toStringAsFixed(2)}, '
@@ -343,179 +354,201 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
       return const SizedBox.shrink();
     }
 
-    return SizedBox(
-      height: _cardHeight,
-      child: PageView.builder(
-        controller: _pageCtrl,
-    itemCount: _promotions.length,
-        padEnds: false,
-        itemBuilder: (context, idx) {
-          final promo = _promotions[idx];
-          final headlineValue = _headlineValue(promo);
-          final title = promo.name.isNotEmpty ? promo.name : 'Angebot';
-          final desc = (promo.description ?? '').toString().trim();
-          final period = _formatDate(promo.startsAt.toIso8601String()) +
-              (promo.endsAt != null
-                  ? ' – ${_formatDate(promo.endsAt!.toIso8601String())}'
-                  : '');
-          final glow = 0.6 + 0.4 * _pulseCtrl.value;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, right: 8, bottom: 8),
+          child: Text(
+            'Aktuelle Angebote und Rabatte',
+            style: GoogleFonts.poppins(
+              color: Colors.white.withValues(alpha: 0.88),
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        SizedBox(
+          height: _cardHeight,
+          child: PageView.builder(
+            controller: _pageCtrl,
+            itemCount: _promotions.length,
+            padEnds: false,
+            itemBuilder: (context, idx) {
+              final promo = _promotions[idx];
+              final headlineValue = _headlineValue(promo);
+              final title = promo.name.isNotEmpty ? promo.name : 'Angebot';
+              final desc = (promo.description ?? '').toString().trim();
+              final period = _formatDate(promo.startsAt.toIso8601String()) +
+                  (promo.endsAt != null
+                      ? ' – ${_formatDate(promo.endsAt!.toIso8601String())}'
+                      : '');
+              final glow = 0.6 + 0.4 * _pulseCtrl.value;
 
-          return GestureDetector(
-            onTap: () => _showDetail(context, promo),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Transform.scale(
-                scale: 1.0 + 0.02 * (_pulseCtrl.value - 0.5),
-                child: Container(
-                  width: _cardWidth,
-                  height: _cardHeight,
-                  clipBehavior: Clip.hardEdge,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: Colors.orangeAccent.withValues(alpha: glow),
-                      width: 2,
-                    ),
-                    color: Colors.black.withValues(alpha: 0.3),
-                  ),
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Positioned.fill(
-                        child: BackdropFilter(
-                          filter: ImageFilter.blur(sigmaX: 0, sigmaY: 0),
-                          child: Container(color: Colors.transparent),
+              return GestureDetector(
+                onTap: () => _showDetail(context, promo),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Transform.scale(
+                    scale: 1.0 + 0.02 * (_pulseCtrl.value - 0.5),
+                    child: Container(
+                      width: _cardWidth,
+                      height: _cardHeight,
+                      clipBehavior: Clip.hardEdge,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: Colors.orangeAccent.withValues(alpha: glow),
+                          width: 2,
                         ),
+                        color: Colors.black.withValues(alpha: 0.3),
                       ),
-                      const Positioned(
-                        top: -20,
-                        left: -20,
-                        child: SizedBox(
-                          width: _cardWidth + 40,
-                          height: _cardHeight + 40,
-                          child: FireParticles(
-                            width: _cardWidth + 40,
-                            height: _cardHeight + 40,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Positioned.fill(
+                            child: BackdropFilter(
+                              filter: ImageFilter.blur(sigmaX: 0, sigmaY: 0),
+                              child: Container(color: Colors.transparent),
+                            ),
                           ),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            final descMaxLines = _computeDescMaxLines(
-                              constraints: constraints,
-                              title: title,
-                              headlineValue: headlineValue,
-                              period: period,
-                              hasDescription: desc.isNotEmpty,
-                              cardIndex: idx,
-                              descLength: desc.length,
-                            );
+                          const Positioned(
+                            top: -20,
+                            left: -20,
+                            child: SizedBox(
+                              width: _cardWidth + 40,
+                              height: _cardHeight + 40,
+                              child: FireParticles(
+                                width: _cardWidth + 40,
+                                height: _cardHeight + 40,
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                final descMaxLines = _computeDescMaxLines(
+                                  constraints: constraints,
+                                  title: title,
+                                  headlineValue: headlineValue,
+                                  period: period,
+                                  hasDescription: desc.isNotEmpty,
+                                  cardIndex: idx,
+                                  descLength: desc.length,
+                                );
 
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
+                                return Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Expanded(
-                                      child: Text(
-                                        title,
-                                        style: GoogleFonts.fredokaOne(
-                                          color: Colors.white,
-                                          fontSize: 17,
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            title,
+                                            style: GoogleFonts.fredokaOne(
+                                              color: Colors.white,
+                                              fontSize: 17,
+                                            ),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
                                         ),
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
+                                        IconButton(
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                          icon: const Icon(
+                                            Icons.info_outline,
+                                            size: 20,
+                                            color: Colors.white70,
+                                          ),
+                                          onPressed: () =>
+                                              _showDetail(context, promo),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 4),
+                                    // ——— динамический градиент для цифры скидки ———
+                                    AnimatedBuilder(
+                                      animation: _gradAnim,
+                                      builder: (context, child) {
+                                        final t = _gradAnim.value;
+                                        final begin =
+                                            Alignment(-1.0 + 2 * t, 0);
+                                        final end = Alignment(1.0 - 2 * t, 0);
+                                        return ShaderMask(
+                                          blendMode: BlendMode.srcIn,
+                                          shaderCallback: (bounds) {
+                                            return LinearGradient(
+                                              begin: begin,
+                                              end: end,
+                                              colors: const [
+                                                Colors.yellowAccent,
+                                                Colors.orangeAccent,
+                                                Colors.redAccent,
+                                              ],
+                                            ).createShader(bounds);
+                                          },
+                                          child: child,
+                                        );
+                                      },
+                                      child: Text(
+                                        headlineValue,
+                                        style: GoogleFonts.fredokaOne(
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                        ),
                                       ),
                                     ),
-                                    IconButton(
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(),
-                                      icon: const Icon(
-                                        Icons.info_outline,
-                                        size: 20,
-                                        color: Colors.white70,
+                                    const SizedBox(height: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          if (desc.isNotEmpty &&
+                                              descMaxLines > 0)
+                                            Text(
+                                              desc,
+                                              style: GoogleFonts.poppins(
+                                                color: Colors.white70,
+                                                fontSize: 13,
+                                              ),
+                                              maxLines: descMaxLines,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          if (desc.isNotEmpty &&
+                                              descMaxLines > 0)
+                                            const SizedBox(height: 6),
+                                          const Spacer(),
+                                          Text(
+                                            period,
+                                            style: GoogleFonts.poppins(
+                                              color: Colors.white54,
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                      onPressed: () => _showDetail(context, promo),
                                     ),
                                   ],
-                                ),
-                                const SizedBox(height: 4),
-                                // ——— динамический градиент для цифры скидки ———
-                                AnimatedBuilder(
-                                  animation: _gradAnim,
-                                  builder: (context, child) {
-                                    final t = _gradAnim.value;
-                                    final begin = Alignment(-1.0 + 2 * t, 0);
-                                    final end   = Alignment(1.0 - 2 * t, 0);
-                                    return ShaderMask(
-                                      blendMode: BlendMode.srcIn,
-                                      shaderCallback: (bounds) {
-                                        return LinearGradient(
-                                          begin: begin,
-                                          end: end,
-                                          colors: const [
-                                            Colors.yellowAccent,
-                                            Colors.orangeAccent,
-                                            Colors.redAccent,
-                                          ],
-                                        ).createShader(bounds);
-                                      },
-                                      child: child,
-                                    );
-                                  },
-                                  child: Text(
-                                    headlineValue,
-                                    style: GoogleFonts.fredokaOne(
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      if (desc.isNotEmpty && descMaxLines > 0)
-                                        Text(
-                                          desc,
-                                          style: GoogleFonts.poppins(
-                                            color: Colors.white70,
-                                            fontSize: 13,
-                                          ),
-                                          maxLines: descMaxLines,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      if (desc.isNotEmpty && descMaxLines > 0)
-                                        const SizedBox(height: 6),
-                                      const Spacer(),
-                                      Text(
-                                        period,
-                                        style: GoogleFonts.poppins(
-                                          color: Colors.white54,
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ),
-          );
-        },
-      ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -543,70 +576,76 @@ class _DiscountListWidgetState extends State<DiscountListWidget>
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       isScrollControlled: true,
-      builder: (_) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 18),
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(4),
+      builder: (_) {
+        final bottomPadding =
+            MediaQuery.of(ctx).padding.bottom + kBottomNavigationBarHeight;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(20, 24, 20, bottomPadding),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 18),
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
                   ),
                 ),
-              ),
-              Text(
-                title,
-                style: GoogleFonts.fredokaOne(
-                  color: Colors.orangeAccent,
-                  fontSize: 24,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                _badgeLabel(promo),
-                style: GoogleFonts.poppins(
-                  color: Colors.orangeAccent,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 16,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                detailValue,
-                style: GoogleFonts.poppins(
-                  color: Colors.yellowAccent,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 26,
-                ),
-              ),
-              if (desc.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12, bottom: 2),
-                  child: Text(
-                    desc,
-                    style: GoogleFonts.poppins(color: Colors.white, fontSize: 15),  
+                Text(
+                  title,
+                  style: GoogleFonts.fredokaOne(
+                    color: Colors.orangeAccent,
+                    fontSize: 24,
                   ),
                 ),
-              if (period.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    period,
-                    style: GoogleFonts.poppins(color: Colors.white60, fontSize: 14),
+                const SizedBox(height: 10),
+                Text(
+                  _badgeLabel(promo),
+                  style: GoogleFonts.poppins(
+                    color: Colors.orangeAccent,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
                   ),
                 ),
-              const SizedBox(height: 18),
-            ],
+                const SizedBox(height: 8),
+                Text(
+                  detailValue,
+                  style: GoogleFonts.poppins(
+                    color: Colors.yellowAccent,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 26,
+                  ),
+                ),
+                if (desc.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12, bottom: 2),
+                    child: Text(
+                      desc,
+                      style: GoogleFonts.poppins(
+                          color: Colors.white, fontSize: 15),
+                    ),
+                  ),
+                if (period.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      period,
+                      style: GoogleFonts.poppins(
+                          color: Colors.white60, fontSize: 14),
+                    ),
+                  ),
+                const SizedBox(height: 18),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

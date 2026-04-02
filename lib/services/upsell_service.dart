@@ -3,6 +3,7 @@
 import 'dart:convert';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'cart_service.dart';
+import 'restaurant_context.dart';
 
 class UpSellService {
   static final SupabaseClient _client = Supabase.instance.client;
@@ -28,6 +29,7 @@ class UpSellService {
       final itRow = await _client
           .from('menu_v2_item')
           .select('id, category_id')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('id', itemId)
           .maybeSingle();
       if (itRow == null) return [];
@@ -37,11 +39,13 @@ class UpSellService {
       final catGroupsRaw = await _client
           .from('menu_v2_category_upsell_group')
           .select('upsell_group_id, sort_order')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('category_id', catId)
           .order('sort_order');
       final itemOvRaw = await _client
           .from('menu_v2_item_upsell_group_override')
           .select('upsell_group_id, enabled, sort_order')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('item_id', itemId);
 
       final catGroups = (catGroupsRaw as List).cast<Map<String, dynamic>>();
@@ -80,6 +84,7 @@ class UpSellService {
       final ugRows = await _client
           .from('menu_v2_upsell_group')
           .select('id, name, max_items')
+          .eq('restaurant_id', RestaurantContext.current)
           .filter('id', 'in', '(${groupIds.join(',')})');
       final ugList = (ugRows as List).cast<Map<String, dynamic>>();
       final maxItemsByGroup = {
@@ -101,6 +106,7 @@ class UpSellService {
         final srcRows = await _client
             .from('menu_v2_upsell_group_source')
             .select('include_type, category_id, item_id')
+          .eq('restaurant_id', RestaurantContext.current)
             .eq('upsell_group_id', gid);
         final srcList = (srcRows as List).cast<Map<String, dynamic>>();
 
@@ -121,6 +127,7 @@ class UpSellService {
           final itemsByCat = await _client
               .from('menu_v2_item')
               .select('id')
+              .eq('restaurant_id', RestaurantContext.current)
               .filter('category_id', 'in', '(${catIds.join(',')})')
               .eq('is_active', true);
           for (final r in (itemsByCat as List).cast<Map<String, dynamic>>()) {
@@ -154,6 +161,7 @@ class UpSellService {
       final priceRows = await _client
           .from('menu_v2_item_prices')
           .select('item_id, size_id, price, is_single_size')
+          .eq('restaurant_id', RestaurantContext.current)
           .filter('item_id', 'in', '(${ids.join(',')})');
       final minPriceByItem = <int, double>{};
       for (final r in (priceRows as List).cast<Map<String, dynamic>>()) {
@@ -167,6 +175,7 @@ class UpSellService {
       final rawItems = await _client
           .from('menu_v2_item')
           .select('id, name, sku, image_url')
+          .eq('restaurant_id', RestaurantContext.current)
           .filter('id', 'in', '(${ids.join(',')})');
       final itemsList = (rawItems as List).cast<Map<String, dynamic>>();
 
@@ -211,6 +220,7 @@ class UpSellService {
     final rulesRes = await _client
         .from('upsell_rules')
         .select('id, name, priority, condition_json, offer_item_ids, offer_limit')
+      .eq('restaurant_id', RestaurantContext.current)
         .eq('active', true)
         .eq('channel', channel)
         .order('priority', ascending: true);
@@ -346,6 +356,7 @@ class UpSellService {
     final priceRows = await _client
         .from('menu_v2_item_prices')
         .select('item_id, size_id, price, is_single_size')
+      .eq('restaurant_id', RestaurantContext.current)
         .filter('item_id', 'in', '(${ids.join(',')})');
     final minPriceByItem = <int, double>{};
     for (final r in (priceRows as List).cast<Map<String, dynamic>>()) {
@@ -359,6 +370,7 @@ class UpSellService {
     final rawItems = await _client
         .from('menu_v2_item')
         .select('id, name, sku, image_url')
+      .eq('restaurant_id', RestaurantContext.current)
         .filter('id', 'in', ids);
     final itemsList = (rawItems as List).cast<Map<String, dynamic>>();
 

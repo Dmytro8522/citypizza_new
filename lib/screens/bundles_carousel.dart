@@ -5,8 +5,9 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../theme/theme_provider.dart';
-import '../widgets/no_internet_widget.dart';
 import 'bundle_detail_screen.dart';
+import '../services/restaurant_context.dart';
+import '../services/menu_visibility_service.dart';
 
 class BundleSummary {
   final int id;
@@ -26,7 +27,8 @@ class BundleSummary {
 }
 
 class BundlesSection extends StatefulWidget {
-  const BundlesSection({super.key});
+  final ValueChanged<bool>? onAvailabilityChanged;
+  const BundlesSection({super.key, this.onAvailabilityChanged});
 
   @override
   State<BundlesSection> createState() => _BundlesSectionState();
@@ -54,9 +56,12 @@ class _BundlesSectionState extends State<BundlesSection> {
       final rows = await _supabase
           .from('menu_v2_bundle')
           .select('id, name, description, image_url, is_active, price')
-          .eq('is_active', true)
+          .eq('restaurant_id', RestaurantContext.current)
           .order('id', ascending: true);
-      final list = (rows as List).cast<Map<String, dynamic>>();
+      final list = (rows as List)
+          .cast<Map<String, dynamic>>()
+          .where(MenuVisibilityService.isVisibleEntity)
+          .toList();
       final bundles = <BundleSummary>[];
       for (final m in list) {
         final id = (m['id'] as int?) ?? 0;
@@ -75,12 +80,14 @@ class _BundlesSectionState extends State<BundlesSection> {
         _bundles = bundles;
         _loading = false;
       });
+      widget.onAvailabilityChanged?.call(bundles.isNotEmpty);
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
       });
+      widget.onAvailabilityChanged?.call(false);
     }
   }
 

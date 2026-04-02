@@ -1,4 +1,4 @@
-package com.citypizza.order
+package com.eds.appeds
 
 import io.flutter.embedding.android.FlutterActivity
 

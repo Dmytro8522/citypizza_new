@@ -13,8 +13,16 @@ class SearchResultTile extends StatelessWidget {
   final String query;
   final String? categoryName;
   final PromotionPrice? priceInfo;
+  final String? promotionHint;
 
-  const SearchResultTile({super.key, required this.item, required this.onTap, required this.query, this.categoryName, this.priceInfo});
+  const SearchResultTile(
+      {super.key,
+      required this.item,
+      required this.onTap,
+      required this.query,
+      this.categoryName,
+      this.priceInfo,
+      this.promotionHint});
 
   @override
   Widget build(BuildContext context) {
@@ -57,11 +65,13 @@ class SearchResultTile extends StatelessWidget {
                 if (categoryName != null && categoryName!.trim().isNotEmpty)
                   Container(
                     margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.06),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                      border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.08)),
                     ),
                     child: Text(
                       categoryName!,
@@ -72,7 +82,8 @@ class SearchResultTile extends StatelessWidget {
                       ),
                     ),
                   ),
-                _buildHighlightedTitle(item.name, query, titleStyle, highlightStyle),
+                _buildHighlightedTitle(
+                    item.name, query, titleStyle, highlightStyle),
                 if (item.description != null && item.description!.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
@@ -87,12 +98,35 @@ class SearchResultTile extends StatelessWidget {
                       softWrap: true,
                     ),
                   ),
+                if (promotionHint != null && promotionHint!.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                            color: Colors.green.withValues(alpha: 0.45)),
+                      ),
+                      child: Text(
+                        promotionHint!,
+                        style: GoogleFonts.poppins(
+                          color: Colors.green.shade100,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
                 const SizedBox(height: 10),
                 Row(
                   children: [
                     if (priceContent != null)
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
                           color: appTheme.primaryColor.withValues(alpha: 0.16),
                           borderRadius: BorderRadius.circular(12),
@@ -128,7 +162,8 @@ class SearchResultTile extends StatelessWidget {
     if (item.hasMultipleSizes) {
       fallback = item.minPrice > 0 ? item.minPrice : null;
     } else {
-      fallback = item.singleSizePrice ?? (item.minPrice > 0 ? item.minPrice : null);
+      fallback =
+          item.singleSizePrice ?? (item.minPrice > 0 ? item.minPrice : null);
     }
     if (fallback == null) return null;
     return PromotionPrice(
@@ -174,9 +209,14 @@ class SearchResultTile extends StatelessWidget {
     return content;
   }
 
-  Widget _buildHighlightedTitle(String text, String query, TextStyle base, TextStyle highlight) {
+  Widget _buildHighlightedTitle(
+      String text, String query, TextStyle base, TextStyle highlight) {
     if (query.trim().isEmpty) {
-      return Text(text, style: base, maxLines: 3, overflow: TextOverflow.ellipsis, softWrap: true);
+      return Text(text,
+          style: base,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          softWrap: true);
     }
     final lowerText = text.toLowerCase();
     final lowerQuery = query.toLowerCase();
@@ -191,7 +231,9 @@ class SearchResultTile extends StatelessWidget {
       if (idx > start) {
         spans.add(TextSpan(text: text.substring(start, idx), style: base));
       }
-      spans.add(TextSpan(text: text.substring(idx, idx + lowerQuery.length), style: highlight));
+      spans.add(TextSpan(
+          text: text.substring(idx, idx + lowerQuery.length),
+          style: highlight));
       start = idx + lowerQuery.length;
     }
     return RichText(

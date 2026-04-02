@@ -17,7 +17,7 @@ if (hasKeystore) {
 }
 
 android {
-    namespace = "com.citypizza.order"
+    namespace = "com.eds.appeds"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "27.0.12077973"
 
@@ -33,7 +33,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.citypizza.order"
+        applicationId = "com.eds.appeds"
         minSdk = 21
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

@@ -3,41 +3,85 @@ import 'package:flutter/material.dart';
 class AppTheme extends ChangeNotifier {
   // Цвет фона, выбранный пользователем
   Color _backgroundColor;
+  Color? _primaryColor;
+  Color? _secondaryColor;
+  Color? _surfaceColor;
+  Color? _cardColorOverride;
+  Color? _textPrimaryColor;
+  Color? _textSecondaryColor;
+  Color? _buttonColor;
+  Color? _buttonTextColor;
+  Color? _borderColorOverride;
+  Color? _shadowColor;
+  Color? _iconColorOverride;
 
-  AppTheme([Color? initial])
-      : _backgroundColor = initial ?? const Color(0xFF111111);
+  AppTheme({
+    Color? initial,
+    Color? primary,
+    Color? secondary,
+    Color? surface,
+    Color? card,
+    Color? textPrimary,
+    Color? textSecondary,
+    Color? button,
+    Color? buttonText,
+    Color? border,
+    Color? shadow,
+    Color? icon,
+  })  : _backgroundColor = initial ?? const Color(0xFF111111),
+        _primaryColor = primary,
+        _secondaryColor = secondary,
+        _surfaceColor = surface,
+        _cardColorOverride = card,
+        _textPrimaryColor = textPrimary,
+        _textSecondaryColor = textSecondary,
+        _buttonColor = button,
+        _buttonTextColor = buttonText,
+        _borderColorOverride = border,
+        _shadowColor = shadow,
+        _iconColorOverride = icon;
 
   Color get backgroundColor => _backgroundColor;
 
   // Оранжевый для темной темы, иначе вычисляемый акцент
-  Color get primaryColor =>
-      _backgroundColor == const Color(0xFF111111)
-          ? const Color(0xFFFF9800)
-          : _getAccentColor(_backgroundColor);
+    Color get primaryColor =>
+      _primaryColor ??
+      (_backgroundColor == const Color(0xFF111111)
+        ? const Color(0xFFFF9800)
+        : _getAccentColor(_backgroundColor));
+
+    Color get secondaryColor => _secondaryColor ?? primaryColor;
+
+    Color get surfaceColor =>
+      _surfaceColor ?? _getCardColor(_backgroundColor);
 
   // Цвет текста (автоматически белый или черный в зависимости от фона)
-  Color get textColor => _getTextColor(_backgroundColor);
+  Color get textColor =>
+      _textPrimaryColor ?? _getTextColor(_backgroundColor);
 
   // Цвет для вторичного текста
-  Color get textColorSecondary => _getTextColor(_backgroundColor, secondary: true);
+  Color get textColorSecondary =>
+      _textSecondaryColor ?? _getTextColor(_backgroundColor, secondary: true);
 
   // Цвет для иконок
-  Color get iconColor => textColor;
+  Color get iconColor => _iconColorOverride ?? textColor;
 
   // Цвет для карточек/контейнеров
-  Color get cardColor => _getCardColor(_backgroundColor);
+  Color get cardColor => _cardColorOverride ?? _getCardColor(_backgroundColor);
 
   // Цвет для обводки
-  Color get borderColor => _getBorderColor(_backgroundColor);
+  Color get borderColor =>
+      _borderColorOverride ?? _getBorderColor(_backgroundColor);
 
   // Цвет для кнопок
-  Color get buttonColor =>
-      _backgroundColor == const Color(0xFF111111)
-          ? const Color(0xFFFF9800)
-          : primaryColor;
+  Color get buttonColor => _buttonColor ?? primaryColor;
+
+  Color get buttonTextColor => _buttonTextColor ?? textColor;
 
   // Цвет для SnackBar
   Color get snackBarColor => primaryColor;
+
+  Color get shadowColor => _shadowColor ?? Colors.black;
 
   void setBackgroundColor(Color color) {
     _backgroundColor = color;

@@ -8,6 +8,8 @@ import 'dart:io'; // уже есть
 
 import '../utils/globals.dart';
 import '../services/auth_service.dart';
+import '../services/app_config_service.dart';
+import '../utils/app_text.dart';
 import 'settings_screen.dart';
 
 class ProfileScreenAuth extends StatelessWidget {
@@ -83,12 +85,30 @@ class ProfileScreenAuth extends StatelessWidget {
   }
 
   Widget _buildContactInfo(BuildContext context) {
-    const address = 'Härtelstraße 7, 04420 Leipzig';
-    const email = 'do84arov@gmail.com';
-    const phone = '+49 162 4514836';
-    const privacyUrl = 'https://dmytro8522.github.io/citypizza-legal/index.html';
-    const termsUrl = 'https://dmytro8522.github.io/citypizza-legal/terms.html';
-    const supportUrl = 'https://dmytro8522.github.io/citypizza-legal/support.html';
+    final address = AppConfigService.string(
+      'contact.address',
+      fallback: 'Härtelstraße 7, 04420 Leipzig',
+    );
+    final email = AppConfigService.string(
+      'contact.email',
+      fallback: 'do84arov@gmail.com',
+    );
+    final phone = AppConfigService.string(
+      'contact.phone',
+      fallback: '+49 162 4514836',
+    );
+    final privacyUrl = AppConfigService.string(
+      'contact.links.datenschutz',
+      fallback: 'https://dmytro8522.github.io/citypizza-legal/index.html',
+    );
+    final termsUrl = AppConfigService.string(
+      'contact.links.agb',
+      fallback: 'https://dmytro8522.github.io/citypizza-legal/terms.html',
+    );
+    final supportUrl = AppConfigService.string(
+      'contact.links.support',
+      fallback: 'https://dmytro8522.github.io/citypizza-legal/support.html',
+    );
 
     return Card(
       color: Colors.white12,
@@ -258,17 +278,31 @@ class ProfileScreenAuth extends StatelessWidget {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppConfigService.color(
+          'theme.appBarBackground',
+          fallback: Colors.black,
+        ),
         title: Text(
-          'Profil',
-          style: GoogleFonts.fredokaOne(color: Colors.orange),
+          AppText.t('appBarTitles.profile', fallback: 'Profil'),
+          style: GoogleFonts.fredokaOne(
+            color: AppConfigService.color(
+              'theme.appBarTitleColor',
+              fallback: Colors.orange,
+            ),
+          ),
         ),
         centerTitle: true,
         automaticallyImplyLeading: false,
         elevation: 0,
         actions: [
           IconButton(
-            icon: const Icon(Icons.shopping_cart, color: Colors.white), // цвет иконки теперь белый
+            icon: Icon(
+              Icons.shopping_cart,
+              color: AppConfigService.color(
+                'theme.appBarIconColor',
+                fallback: Colors.white,
+              ),
+            ),
             tooltip: 'Warenkorb',
             onPressed: () {
               Navigator.of(context).pushNamed('/cart');

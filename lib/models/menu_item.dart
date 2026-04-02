@@ -10,6 +10,8 @@ class MenuItem {
   final double minPrice;
   final bool hasMultipleSizes;
   final double? singleSizePrice;
+  final bool isActive;
+  final bool isDeleted;
 
   MenuItem({
     required this.id,
@@ -25,6 +27,8 @@ class MenuItem {
     required this.minPrice,
     this.hasMultipleSizes = true,
     this.singleSizePrice,
+    this.isActive = true,
+    this.isDeleted = false,
   });
 
   factory MenuItem.fromMap(Map<String, dynamic> m) => MenuItem(
@@ -38,10 +42,13 @@ class MenuItem {
         gross: (m['gross'] as num?)?.toDouble(),
         familie: (m['familie'] as num?)?.toDouble(),
         party: (m['party'] as num?)?.toDouble(),
-        minPrice: m['minPrice'] is num ? (m['minPrice'] as num).toDouble() : 0.0,
+        minPrice:
+            m['minPrice'] is num ? (m['minPrice'] as num).toDouble() : 0.0,
         hasMultipleSizes: m['has_multiple_sizes'] as bool? ?? true,
         singleSizePrice: m['single_size_price'] != null
             ? (m['single_size_price'] as num).toDouble()
             : null,
+        isActive: m['is_active'] as bool? ?? true,
+        isDeleted: m['is_deleted'] as bool? ?? false,
       );
 }

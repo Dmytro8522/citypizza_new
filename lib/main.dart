@@ -21,13 +21,19 @@ import 'screens/cookie_settings_screen.dart';
 import 'widgets/main_scaffold.dart';
 import 'theme/app_theme.dart';
 import 'theme/theme_provider.dart';
+import 'services/app_config_service.dart';
+import 'services/restaurant_context.dart';
+import 'widgets/app_config_provider.dart';
+import 'services/auth_service.dart';
 
 /// Фоновый хендлер для пушей, когда приложение убито или свернуто
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // Инициализируем Firebase, чтобы можно было обрабатывать сообщение
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  if (Firebase.apps.isEmpty) {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  }
 }
 
 // Канал для Android heads-up уведомлений
@@ -101,11 +107,17 @@ Future<void> _showLocalNotification(RemoteMessage message) async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // 0) Загружаем конфигурацию бренда/темы/текстов
+  await AppConfigService.loadFromAssets();
+  await RestaurantContext.init();
+
   // 1) Инициализируем Firebase
   // Исправление: используем DefaultFirebaseOptions для корректной инициализации на Android и iOS
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  if (Firebase.apps.isEmpty) {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  }
 
   // Инициализируем локальные уведомления для баннеров в foreground
   await _initLocalNotifications();
@@ -179,9 +191,61 @@ void main() async {
   }
 
   runApp(
-    ThemeProvider(
-      notifier: AppTheme(),
-      child: MyApp(initialPage: initialPage),
+    AppConfigProvider(
+      config: AppConfigService.config,
+      child: ThemeProvider(
+        notifier: AppTheme(
+          initial: AppConfigService.color(
+            'theme.background',
+            fallback: const Color(0xFF111111),
+          ),
+          primary: AppConfigService.color(
+            'theme.primary',
+            fallback: const Color(0xFFFF9800),
+          ),
+          secondary: AppConfigService.color(
+            'theme.secondary',
+            fallback: const Color(0xFFFF9800),
+          ),
+          surface: AppConfigService.color(
+            'theme.surface',
+            fallback: const Color(0xFF1C1C1C),
+          ),
+          card: AppConfigService.color(
+            'theme.card',
+            fallback: const Color(0xFF1C1C1C),
+          ),
+          textPrimary: AppConfigService.color(
+            'theme.textPrimary',
+            fallback: Colors.white,
+          ),
+          textSecondary: AppConfigService.color(
+            'theme.textSecondary',
+            fallback: Colors.white70,
+          ),
+          button: AppConfigService.color(
+            'theme.buttonBackground',
+            fallback: const Color(0xFFFF9800),
+          ),
+          buttonText: AppConfigService.color(
+            'theme.buttonText',
+            fallback: Colors.white,
+          ),
+          border: AppConfigService.color(
+            'theme.border',
+            fallback: Colors.white24,
+          ),
+          shadow: AppConfigService.color(
+            'theme.shadow',
+            fallback: Colors.black,
+          ),
+          icon: AppConfigService.color(
+            'theme.icon',
+            fallback: Colors.white,
+          ),
+        ),
+        child: MyApp(initialPage: initialPage),
+      ),
     ),
   );
 }
@@ -213,8 +277,11 @@ class _MyAppState extends State<MyApp> {
   }
 
   void _listenAuthChanges() {
-    _supabase.auth.onAuthStateChange.listen((_) {
-      _saveFcmToken();
+    _supabase.auth.onAuthStateChange.listen((_) async {
+      // При любом изменении аутентификации сохраняем FCM токен (если есть)
+      await _saveFcmToken();
+      // И создаем профиль в user_data, если он отсутствует
+      await AuthService.ensureUserProfile();
     });
   }
 
@@ -250,8 +317,15 @@ class _MyAppState extends State<MyApp> {
         await _supabase.auth.setSession(at);
       } catch (_) {}
     }
-    if (uri.scheme == 'citypizza' && uri.host == 'reset-password') {
+    if (uri.scheme == 'edspizzaservice' && uri.host == 'reset-password') {
       navigatorKey.currentState?.pushNamed('reset_password');
+    }
+    // При успешном подтверждении почты Supabase может редиректить на login-callback
+    if (uri.scheme == 'edspizzaservice' && uri.host == 'login-callback') {
+      // Если сессия уже установлена через code/access_token, перейдём на профиль
+      if (_supabase.auth.currentUser != null) {
+        navigatorKey.currentState?.pushReplacementNamed('tab_2');
+      }
     }
   }
 
@@ -289,7 +363,11 @@ class _MyAppState extends State<MyApp> {
       await _supabase
           .from('user_tokens')
           .upsert(
-            {'user_id': _supabase.auth.currentUser!.id, 'fcm_token': token},
+            {
+              'user_id': _supabase.auth.currentUser!.id,
+              'fcm_token': token,
+              'restaurant_id': RestaurantContext.current,
+            },
             onConflict: 'user_id',
           )
           .select();

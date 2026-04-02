@@ -7,6 +7,7 @@ import 'dart:io';
 
 import '../widgets/common_app_bar.dart';
 import '../utils/globals.dart';
+import '../services/app_config_service.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -49,12 +50,30 @@ class ProfileScreen extends StatelessWidget {
   }
 
   Widget _buildContactInfo(BuildContext context) {
-    const address = 'Härtelstraße 7, 04420 Leipzig';
-    const email = 'do84arov@gmail.com';
-    const phone = '+49 162 4514836';
-    const privacyUrl = 'https://dmytro8522.github.io/citypizza-legal/index.html';
-    const termsUrl = 'https://dmytro8522.github.io/citypizza-legal/terms.html';
-    const supportUrl = 'https://dmytro8522.github.io/citypizza-legal/support.html';
+    final address = AppConfigService.string(
+      'contact.address',
+      fallback: 'Härtelstraße 7, 04420 Leipzig',
+    );
+    final email = AppConfigService.string(
+      'contact.email',
+      fallback: 'do84arov@gmail.com',
+    );
+    final phone = AppConfigService.string(
+      'contact.phone',
+      fallback: '+49 162 4514836',
+    );
+    final privacyUrl = AppConfigService.string(
+      'contact.links.datenschutz',
+      fallback: 'https://dmytro8522.github.io/citypizza-legal/index.html',
+    );
+    final termsUrl = AppConfigService.string(
+      'contact.links.agb',
+      fallback: 'https://dmytro8522.github.io/citypizza-legal/terms.html',
+    );
+    final supportUrl = AppConfigService.string(
+      'contact.links.support',
+      fallback: 'https://dmytro8522.github.io/citypizza-legal/support.html',
+    );
 
     return Card(
       color: Colors.white12,
@@ -219,6 +238,7 @@ class ProfileScreen extends StatelessWidget {
       backgroundColor: Colors.black,
       appBar: buildCommonAppBar(
         title: 'Profil',
+        titleKey: 'appBarTitles.profile',
         context: context,
       ),
       body: SafeArea(
@@ -254,13 +274,13 @@ class ProfileScreen extends StatelessWidget {
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
-                      _buildBenefit(
-                        icon: Icons.cake,
-                        title: 'Geburtstagsrabatt',
-                        subtitle:
-                            'Sichern Sie sich einen persönlichen Rabatt an Ihrem Ehrentag.',
-                      ),
-                      const Divider(color: Colors.white24),
+                      // _buildBenefit(
+                      //   icon: Icons.cake,
+                      //   title: 'Geburtstagsrabatt',
+                      //   subtitle:
+                      //       'Sichern Sie sich einen persönlichen Rabatt an Ihrem Ehrentag.',
+                      // ),
+                      // const Divider(color: Colors.white24),
                       _buildBenefit(
                         icon: Icons.star,
                         title: 'Exklusive Angebote',

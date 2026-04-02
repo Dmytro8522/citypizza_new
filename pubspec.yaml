@@ -53,3 +53,4 @@ flutter:
     - assets/cookie_illustration.png
     - assets/icon/app_icon.png
     - assets/fire.json
+    - assets/config/app_config.json

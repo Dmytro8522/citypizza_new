@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'restaurant_context.dart';
 import 'package:flutter/material.dart';
 
 // Notifier to signal UI that promotions should refresh when a push arrives
@@ -33,6 +35,7 @@ class Promotion {
   final TimeOfDay? timeTo;
   final bool isActive;
   final int priority;
+  final int? freeExtrasLimit;
   final List<PromotionTarget> targets;
 
   Promotion({
@@ -48,6 +51,7 @@ class Promotion {
     required this.timeTo,
     required this.isActive,
     required this.priority,
+    required this.freeExtrasLimit,
     required this.targets,
   });
 }
@@ -55,10 +59,13 @@ class Promotion {
 class PromotionTarget {
   final int id;
   final int promotionId;
-  final String targetType; // category | category_size | item | item_size
+  final String
+      targetType; // category | category_size | category_size_extra | category_size_modifier | item | item_size | item_size_extra | item_size_modifier
   final int? categoryId;
   final int? itemId;
   final int? sizeId;
+  final int? extraId;
+  final int? modifierOptionId;
 
   PromotionTarget({
     required this.id,
@@ -67,6 +74,8 @@ class PromotionTarget {
     required this.categoryId,
     required this.itemId,
     required this.sizeId,
+    required this.extraId,
+    required this.modifierOptionId,
   });
 }
 
@@ -131,9 +140,15 @@ class _PromotionSelection {
 
 int _targetSpecificity(PromotionTarget t) {
   switch (t.targetType) {
+    case 'item_size_extra':
+    case 'item_size_modifier':
+      return 6;
     case 'item_size':
-      return 4;
+      return 5;
     case 'item':
+      return 4;
+    case 'category_size_extra':
+    case 'category_size_modifier':
       return 3;
     case 'category_size':
       return 2;
@@ -149,19 +164,63 @@ PromotionTarget? _bestTargetForPromotion(
   required int itemId,
   int? categoryId,
   int? sizeId,
+  Set<int> selectedExtraIds = const <int>{},
+  Set<int> selectedModifierOptionIds = const <int>{},
 }) {
   PromotionTarget? best;
   for (final target in promotion.targets) {
     bool matches = false;
     switch (target.targetType) {
       case 'item_size':
-        matches = target.itemId == itemId && target.sizeId == sizeId && itemId != 0 && sizeId != null;
+        matches = target.itemId == itemId &&
+            target.sizeId == sizeId &&
+            itemId != 0 &&
+            sizeId != null;
+        break;
+      case 'item_size_extra':
+        final allowWithoutSelectedExtra = (promotion.freeExtrasLimit ?? 0) > 0;
+        matches = target.itemId == itemId &&
+            target.sizeId == sizeId &&
+            itemId != 0 &&
+            sizeId != null &&
+            target.extraId != null &&
+            (selectedExtraIds.contains(target.extraId) ||
+                allowWithoutSelectedExtra);
+        break;
+      case 'item_size_modifier':
+        matches = target.itemId == itemId &&
+            target.sizeId == sizeId &&
+            itemId != 0 &&
+            sizeId != null &&
+            target.modifierOptionId != null &&
+            selectedModifierOptionIds.contains(target.modifierOptionId);
         break;
       case 'item':
         matches = target.itemId == itemId && itemId != 0;
         break;
       case 'category_size':
-        matches = target.categoryId == categoryId && target.sizeId == sizeId && categoryId != null && sizeId != null;
+        matches = target.categoryId == categoryId &&
+            target.sizeId == sizeId &&
+            categoryId != null &&
+            sizeId != null;
+        break;
+      case 'category_size_extra':
+        final allowWithoutSelectedExtra = (promotion.freeExtrasLimit ?? 0) > 0;
+        matches = target.categoryId == categoryId &&
+            target.sizeId == sizeId &&
+            categoryId != null &&
+            sizeId != null &&
+            target.extraId != null &&
+            (selectedExtraIds.contains(target.extraId) ||
+                allowWithoutSelectedExtra);
+        break;
+      case 'category_size_modifier':
+        matches = target.categoryId == categoryId &&
+            target.sizeId == sizeId &&
+            categoryId != null &&
+            sizeId != null &&
+            target.modifierOptionId != null &&
+            selectedModifierOptionIds.contains(target.modifierOptionId);
         break;
       case 'category':
         matches = target.categoryId == categoryId && categoryId != null;
@@ -183,6 +242,10 @@ _PromotionSelection? _selectBestPromotion(
   required double unitPrice,
   int? categoryId,
   int? sizeId,
+  Set<int> selectedExtraIds = const <int>{},
+  Set<int> selectedModifierOptionIds = const <int>{},
+  List<Map<String, dynamic>> selectedExtraLineItems =
+      const <Map<String, dynamic>>[],
 }) {
   _PromotionSelection? best;
   for (final promotion in promotions) {
@@ -192,6 +255,8 @@ _PromotionSelection? _selectBestPromotion(
       itemId: itemId,
       categoryId: categoryId,
       sizeId: sizeId,
+      selectedExtraIds: selectedExtraIds,
+      selectedModifierOptionIds: selectedModifierOptionIds,
     );
     if (target == null) continue;
     final candidate = _PromotionSelection(
@@ -203,7 +268,8 @@ _PromotionSelection? _selectBestPromotion(
       best = candidate;
       continue;
     }
-    final prioCmp = candidate.promotion.priority.compareTo(best.promotion.priority);
+    final prioCmp =
+        candidate.promotion.priority.compareTo(best.promotion.priority);
     if (prioCmp > 0) {
       best = candidate;
       continue;
@@ -211,14 +277,23 @@ _PromotionSelection? _selectBestPromotion(
     if (prioCmp < 0) {
       continue;
     }
-    final bestFinal = _finalUnitPriceForPromotion(
+    final bestDiscount = _calculateLineDiscount(
       promotion: best.promotion,
+      target: best.target,
       unitPrice: unitPrice,
+      quantity: 1,
+      selectedExtraLineItems: selectedExtraLineItems,
     );
-    final candidateFinal = _finalUnitPriceForPromotion(
+    final candidateDiscount = _calculateLineDiscount(
       promotion: candidate.promotion,
+      target: candidate.target,
       unitPrice: unitPrice,
+      quantity: 1,
+      selectedExtraLineItems: selectedExtraLineItems,
     );
+    final bestFinal = (unitPrice - bestDiscount).clamp(0, unitPrice).toDouble();
+    final candidateFinal =
+        (unitPrice - candidateDiscount).clamp(0, unitPrice).toDouble();
     final finalCmp = candidateFinal.compareTo(bestFinal);
     if (finalCmp < 0) {
       best = candidate;
@@ -274,16 +349,126 @@ double _finalUnitPriceForPromotion({
   return finalPrice;
 }
 
+Set<int> _eligibleExtraIdsForPromotionTarget({
+  required Promotion promotion,
+  required PromotionTarget selectedTarget,
+}) {
+  final ids = <int>{};
+  final isItemScope = selectedTarget.targetType == 'item_size_extra';
+  final isCategoryScope = selectedTarget.targetType == 'category_size_extra';
+
+  if (!isItemScope && !isCategoryScope) return ids;
+
+  for (final t in promotion.targets) {
+    if (t.extraId == null) continue;
+    if (isItemScope &&
+        t.targetType == 'item_size_extra' &&
+        t.itemId == selectedTarget.itemId &&
+        t.sizeId == selectedTarget.sizeId) {
+      ids.add(t.extraId!);
+    }
+    if (isCategoryScope &&
+        t.targetType == 'category_size_extra' &&
+        t.categoryId == selectedTarget.categoryId &&
+        t.sizeId == selectedTarget.sizeId) {
+      ids.add(t.extraId!);
+    }
+  }
+
+  if (ids.isEmpty && selectedTarget.extraId != null) {
+    ids.add(selectedTarget.extraId!);
+  }
+  return ids;
+}
+
+double _extraOverflowAmountPerUnit({
+  required Promotion promotion,
+  required PromotionTarget target,
+  List<Map<String, dynamic>> selectedExtraLineItems =
+      const <Map<String, dynamic>>[],
+}) {
+  final freeLimit = promotion.freeExtrasLimit;
+  if (freeLimit == null || freeLimit <= 0) return 0;
+
+  final isExtraScopedTarget = target.targetType == 'item_size_extra' ||
+      target.targetType == 'category_size_extra';
+  if (!isExtraScopedTarget) return 0;
+
+  final eligibleExtraIds = _eligibleExtraIdsForPromotionTarget(
+    promotion: promotion,
+    selectedTarget: target,
+  );
+
+  var nonEligibleCost = 0.0;
+  final eligibleUnits = <double>[];
+  for (final extra in selectedExtraLineItems) {
+    final id = (extra['id'] as num?)?.toInt() ?? 0;
+    final qty = math.max(0, (extra['quantity'] as num?)?.toInt() ?? 0);
+    final unitPrice = (extra['unit_price'] as num?)?.toDouble() ?? 0;
+    if (id == 0 || qty <= 0 || unitPrice <= 0) continue;
+    if (!eligibleExtraIds.contains(id)) {
+      nonEligibleCost += unitPrice * qty;
+      continue;
+    }
+    for (var i = 0; i < qty; i++) {
+      eligibleUnits.add(unitPrice);
+    }
+  }
+
+  if (eligibleUnits.isEmpty) return nonEligibleCost;
+
+  eligibleUnits.sort((a, b) => b.compareTo(a));
+  final freeSlots = math.min(freeLimit, eligibleUnits.length);
+  var paidEligible = 0.0;
+  for (var i = freeSlots; i < eligibleUnits.length; i++) {
+    paidEligible += eligibleUnits[i];
+  }
+
+  return nonEligibleCost + paidEligible;
+}
+
+double _finalUnitPriceForPromotionWithExtraLimit({
+  required Promotion promotion,
+  required PromotionTarget target,
+  required double unitPrice,
+  List<Map<String, dynamic>> selectedExtraLineItems =
+      const <Map<String, dynamic>>[],
+}) {
+  if (unitPrice <= 0) return 0;
+
+  final overflowPerUnit = _extraOverflowAmountPerUnit(
+    promotion: promotion,
+    target: target,
+    selectedExtraLineItems: selectedExtraLineItems,
+  );
+
+  final eligibleUnitPrice =
+      (unitPrice - overflowPerUnit).clamp(0, unitPrice).toDouble();
+  final promoFinalForEligible = _finalUnitPriceForPromotion(
+    promotion: promotion,
+    unitPrice: eligibleUnitPrice,
+  );
+
+  final finalUnit =
+      (promoFinalForEligible + overflowPerUnit).clamp(0, unitPrice).toDouble();
+  return finalUnit;
+}
+
 double _calculateLineDiscount({
   required Promotion promotion,
+  required PromotionTarget target,
   required double unitPrice,
   required int quantity,
+  List<Map<String, dynamic>> selectedExtraLineItems =
+      const <Map<String, dynamic>>[],
 }) {
   if (quantity <= 0 || unitPrice <= 0) return 0;
   final linePrice = unitPrice * quantity;
-  final finalUnitPrice = _finalUnitPriceForPromotion(
+  final finalUnitPrice = _finalUnitPriceForPromotionWithExtraLimit(
     promotion: promotion,
+    target: target,
     unitPrice: unitPrice,
+    selectedExtraLineItems: selectedExtraLineItems,
   );
   final finalLinePrice = finalUnitPrice * quantity;
   if (finalLinePrice >= linePrice) return 0;
@@ -297,6 +482,10 @@ PromotionPrice evaluatePromotionForUnitPrice({
   required int itemId,
   int? categoryId,
   int? sizeId,
+  Set<int> selectedExtraIds = const <int>{},
+  Set<int> selectedModifierOptionIds = const <int>{},
+  List<Map<String, dynamic>> selectedExtraLineItems =
+      const <Map<String, dynamic>>[],
 }) {
   if (unitPrice <= 0 || itemId == 0) {
     return PromotionPrice(
@@ -313,6 +502,9 @@ PromotionPrice evaluatePromotionForUnitPrice({
     unitPrice: unitPrice,
     categoryId: categoryId,
     sizeId: sizeId,
+    selectedExtraIds: selectedExtraIds,
+    selectedModifierOptionIds: selectedModifierOptionIds,
+    selectedExtraLineItems: selectedExtraLineItems,
   );
   if (selection == null) {
     return PromotionPrice(
@@ -325,11 +517,14 @@ PromotionPrice evaluatePromotionForUnitPrice({
   }
   final unitDiscount = _calculateLineDiscount(
     promotion: selection.promotion,
+    target: selection.target,
     unitPrice: unitPrice,
     quantity: 1,
+    selectedExtraLineItems: selectedExtraLineItems,
   );
   final cappedDiscount = math.min(unitDiscount, unitPrice);
-  final finalPrice = (unitPrice - cappedDiscount).clamp(0, unitPrice).toDouble();
+  final finalPrice =
+      (unitPrice - cappedDiscount).clamp(0, unitPrice).toDouble();
   return PromotionPrice(
     basePrice: unitPrice,
     finalPrice: finalPrice,
@@ -344,16 +539,24 @@ Future<PromotionPrice> getPromotionPrice({
   required int itemId,
   int? categoryId,
   int? sizeId,
+  Set<int> selectedExtraIds = const <int>{},
+  Set<int> selectedModifierOptionIds = const <int>{},
+  List<Map<String, dynamic>> selectedExtraLineItems =
+      const <Map<String, dynamic>>[],
   DateTime? now,
   bool forceRefresh = false,
 }) async {
-  final promotions = await _PromotionCache.get(now: now, forceRefresh: forceRefresh);
+  final promotions =
+      await _PromotionCache.get(now: now, forceRefresh: forceRefresh);
   return evaluatePromotionForUnitPrice(
     promotions: promotions,
     unitPrice: unitPrice,
     itemId: itemId,
     categoryId: categoryId,
     sizeId: sizeId,
+    selectedExtraIds: selectedExtraIds,
+    selectedModifierOptionIds: selectedModifierOptionIds,
+    selectedExtraLineItems: selectedExtraLineItems,
   );
 }
 
@@ -381,7 +584,9 @@ Future<List<Promotion>> fetchActivePromotions({DateTime? at}) async {
   // Query promotions + targets via two queries (avoid huge JOIN result duplication).
   final pRows = await supa
       .from('menu_v2_promotion')
-      .select('id, name, description, discount_type, discount_value, starts_at, ends_at, weekdays, time_from, time_to, is_active, priority')
+      .select(
+          'id, name, description, discount_type, discount_value, starts_at, ends_at, weekdays, time_from, time_to, is_active, priority, free_extras_limit')
+      .eq('restaurant_id', RestaurantContext.current)
       .lte('starts_at', at.toIso8601String())
       .or('ends_at.is.null,ends_at.gte.${at.toIso8601String()}')
       .eq('is_active', true)
@@ -393,10 +598,13 @@ Future<List<Promotion>> fetchActivePromotions({DateTime? at}) async {
   if (ids.isNotEmpty) {
     final tRows = await supa
         .from('menu_v2_promotion_target')
-        .select('id, promotion_id, target_type, category_id, item_id, size_id')
+        .select(
+            'id, promotion_id, target_type, category_id, item_id, size_id, extra_id, modifier_option_id')
+        .eq('restaurant_id', RestaurantContext.current)
         .filter('promotion_id', 'in', '(${ids.join(',')})');
     for (final r in (tRows as List)) {
-      final pid = r['promotion_id'] as int?; if (pid == null) continue;
+      final pid = r['promotion_id'] as int?;
+      if (pid == null) continue;
       (targetsByPromotion[pid] ??= []).add(PromotionTarget(
         id: (r['id'] as int?) ?? 0,
         promotionId: pid,
@@ -404,6 +612,8 @@ Future<List<Promotion>> fetchActivePromotions({DateTime? at}) async {
         categoryId: r['category_id'] as int?,
         itemId: r['item_id'] as int?,
         sizeId: r['size_id'] as int?,
+        extraId: r['extra_id'] as int?,
+        modifierOptionId: r['modifier_option_id'] as int?,
       ));
     }
   }
@@ -419,8 +629,11 @@ Future<List<Promotion>> fetchActivePromotions({DateTime? at}) async {
     final endsAt = endsAtStr != null ? DateTime.tryParse(endsAtStr) : null;
     if (startsAt.isAfter(at)) continue;
     if (endsAt != null && endsAt.isBefore(at)) continue;
-    final weekdaysRaw = (r['weekdays'] as List?)?.map((e) => e as int).toList() ?? const <int>[];
-    if (weekdaysRaw.isNotEmpty && !weekdaysRaw.contains(normalizedWeekday)) continue;
+    final weekdaysRaw =
+        (r['weekdays'] as List?)?.map((e) => e as int).toList() ??
+            const <int>[];
+    if (weekdaysRaw.isNotEmpty && !weekdaysRaw.contains(normalizedWeekday))
+      continue;
     final tf = _parseTime(r['time_from']);
     final tt = _parseTime(r['time_to']);
     bool timeOk = true;
@@ -446,7 +659,9 @@ Future<List<Promotion>> fetchActivePromotions({DateTime? at}) async {
       timeTo: tt,
       isActive: (r['is_active'] as bool?) ?? true,
       priority: (r['priority'] as int?) ?? 0,
-      targets: targetsByPromotion[(r['id'] as int? ?? 0)] ?? const <PromotionTarget>[],
+      freeExtrasLimit: (r['free_extras_limit'] as num?)?.toInt(),
+      targets: targetsByPromotion[(r['id'] as int? ?? 0)] ??
+          const <PromotionTarget>[],
     ));
   }
   return promotions;
@@ -474,6 +689,22 @@ Future<DiscountResult> calculateDiscountedTotal({
     final itemId = (line['id'] as num?)?.toInt();
     final categoryId = (line['category_id'] as num?)?.toInt();
     final sizeId = (line['size_id'] as num?)?.toInt();
+    final selectedExtraIds = ((line['extra_ids'] as List?) ?? const <dynamic>[])
+        .whereType<num>()
+        .map((e) => e.toInt())
+        .where((e) => e > 0)
+        .toSet();
+    final selectedModifierOptionIds =
+        ((line['modifier_option_ids'] as List?) ?? const <dynamic>[])
+            .whereType<num>()
+            .map((e) => e.toInt())
+            .where((e) => e > 0)
+            .toSet();
+    final selectedExtraLineItems =
+        ((line['extra_line_items'] as List?) ?? const <dynamic>[])
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
 
     final lineSubtotal = unitPrice * qty;
     sumWithoutDiscounts += lineSubtotal;
@@ -488,13 +719,18 @@ Future<DiscountResult> calculateDiscountedTotal({
       unitPrice: unitPrice,
       categoryId: categoryId,
       sizeId: sizeId,
+      selectedExtraIds: selectedExtraIds,
+      selectedModifierOptionIds: selectedModifierOptionIds,
+      selectedExtraLineItems: selectedExtraLineItems,
     );
     if (selection == null) continue;
 
     final discountValue = _calculateLineDiscount(
       promotion: selection.promotion,
+      target: selection.target,
       unitPrice: unitPrice,
       quantity: qty,
+      selectedExtraLineItems: selectedExtraLineItems,
     );
     if (discountValue <= 0) continue;
 
@@ -504,15 +740,23 @@ Future<DiscountResult> calculateDiscountedTotal({
       'name': selection.promotion.name,
       'discount_type': selection.promotion.discountType,
       'discount_value': selection.promotion.discountValue,
+      'free_extras_limit': selection.promotion.freeExtrasLimit,
       'applied_to_index': idx,
       'discount_amount': discountValue,
       'target_type': selection.target.targetType,
       'target_category_id': selection.target.categoryId,
       'target_item_id': selection.target.itemId,
       'target_size_id': selection.target.sizeId,
+      'target_extra_id': selection.target.extraId,
+      'target_modifier_option_id': selection.target.modifierOptionId,
     });
   }
 
-  final total = (sumWithoutDiscounts - totalDiscount).clamp(0, sumWithoutDiscounts).toDouble();
-  return DiscountResult(total: total, totalDiscount: totalDiscount, appliedDiscounts: appliedDiscounts);
+  final total = (sumWithoutDiscounts - totalDiscount)
+      .clamp(0, sumWithoutDiscounts)
+      .toDouble();
+  return DiscountResult(
+      total: total,
+      totalDiscount: totalDiscount,
+      appliedDiscounts: appliedDiscounts);
 }

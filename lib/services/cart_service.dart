@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'delivery_mode_prompt.dart';
+import 'restaurant_context.dart';
 
 /// Модель одного пункта в корзине
 class CartItem {
@@ -239,6 +240,15 @@ class CartService {
     await _save();
   }
 
+  /// Полностью заменить содержимое корзины одним батчем.
+  static Future<void> replaceAll(List<CartItem> items) async {
+    _items
+      ..clear()
+      ..addAll(items);
+    cartCountNotifier.value = _items.length;
+    await _save();
+  }
+
   /// Сохранить текущее состояние в SharedPreferences
   static Future<void> _save() async {
     _prefs ??= await SharedPreferences.getInstance();
@@ -336,6 +346,7 @@ class CartService {
     final data = await Supabase.instance.client
         .from('order_items')
         .select() // получаем все поля
+        .eq('restaurant_id', RestaurantContext.current)
         .eq('order_id', orderId);
     final list = data as List<dynamic>;
     for (var e in list) {
@@ -348,6 +359,7 @@ class CartService {
         final sizeRow = await Supabase.instance.client
             .from('menu_size')
             .select('name')
+            .eq('restaurant_id', RestaurantContext.current)
             .eq('id', m['size_id'])
             .maybeSingle();
         resolvedSize = sizeRow != null
@@ -402,11 +414,17 @@ class CartService {
     final itemRow = await supabase
         .from('menu_v2_item')
         .select('id, name, sku, has_sizes, is_active, is_available')
+        .eq('restaurant_id', RestaurantContext.current)
         .eq('id', itemId)
         .maybeSingle();
 
     if (itemRow == null) {
       throw Exception('Товар с id=$itemId не найден в menu_item');
+    }
+    final isActive = itemRow['is_active'] as bool? ?? true;
+    final isDeleted = itemRow['is_deleted'] as bool? ?? false;
+    if (!isActive || isDeleted) {
+      throw Exception('Dieser Artikel ist nicht verfügbar');
     }
 
     final String itemName = (itemRow['name'] as String?) ?? '';
@@ -416,6 +434,7 @@ class CartService {
     final rows = await supabase
         .from('menu_v2_item_prices')
         .select('size_id, price, is_single_size')
+        .eq('restaurant_id', RestaurantContext.current)
         .eq('item_id', itemId)
         .order('is_single_size', ascending: false)
         .order('size_id', ascending: true);
@@ -458,6 +477,7 @@ class CartService {
         final sz = await supabase
             .from('menu_size')
             .select('name')
+            .eq('restaurant_id', RestaurantContext.current)
             .eq('id', sid)
             .maybeSingle();
         chosenSizeName = (sz?['name'] as String?) ?? defaultSize;

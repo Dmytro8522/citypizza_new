@@ -16,6 +16,8 @@ import 'bundle_detail_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/delivery_zone_service.dart';
 import '../services/cart_service.dart';
+import '../services/restaurant_context.dart';
+import '../services/menu_visibility_service.dart';
 
 class Category {
   final int id;
@@ -26,6 +28,7 @@ class Category {
 
 // Узлы списка для рендера: заголовок категории или элемент меню
 enum _NodeType { header, item }
+
 class _VisibleNode {
   final _NodeType type;
   final int categoryId;
@@ -33,8 +36,7 @@ class _VisibleNode {
   _VisibleNode.header(this.categoryId)
       : type = _NodeType.header,
         item = null;
-  _VisibleNode.item(this.categoryId, this.item)
-      : type = _NodeType.item;
+  _VisibleNode.item(this.categoryId, this.item) : type = _NodeType.item;
 }
 
 class MenuScreen extends StatefulWidget {
@@ -60,16 +62,18 @@ class _MenuScreenState extends State<MenuScreen> {
   List<int> _visibleCategoryIds = [];
   bool _isAppending = false;
   final Map<int, PromotionPrice> _itemPromoSummary = {};
-    // Mindestbestellwert / rabattierte Zwischensumme (für Liefermodus)
-    double? _minOrderAmount;
-    double _discountedCartTotal = 0.0;
-    bool _computingCartTotal = false;
+  final Map<int, String> _itemPromoHint = {};
+  // Mindestbestellwert / rabattierte Zwischensumme (für Liefermodus)
+  double? _minOrderAmount;
+  double _discountedCartTotal = 0.0;
+  bool _computingCartTotal = false;
 
-    bool get _showMinOrderBar {
-      if (_minOrderAmount == null) return false;
-      if (_discountedCartTotal + 0.0001 >= _minOrderAmount!) return false;
-      return true;
-    }
+  bool get _showMinOrderBar {
+    if (_minOrderAmount == null) return false;
+    if (_discountedCartTotal + 0.0001 >= _minOrderAmount!) return false;
+    return true;
+  }
+
   // Горизонтальная прокрутка вкладок категорий + ключи для автопрокрутки
   final ScrollController _catScrollController = ScrollController();
   final Map<int, GlobalKey> _catKeys = {};
@@ -116,7 +120,8 @@ class _MenuScreenState extends State<MenuScreen> {
             _visibleNodes = _buildNodesForCategory(initialCatId);
           }
         });
-        _log('reassemble recovery applied: loading=$_loading, visibleNodes=${_visibleNodes.length}');
+        _log(
+            'reassemble recovery applied: loading=$_loading, visibleNodes=${_visibleNodes.length}');
       }
     });
   }
@@ -143,7 +148,8 @@ class _MenuScreenState extends State<MenuScreen> {
     }
     final postal = prefs.getString('user_postal_code');
     if (postal == null || postal.isEmpty) return;
-    final mo = await DeliveryZoneService.getMinOrderForPostal(postalCode: postal);
+    final mo =
+        await DeliveryZoneService.getMinOrderForPostal(postalCode: postal);
     setState(() => _minOrderAmount = mo);
     await _computeDiscountedCartTotal();
   }
@@ -163,7 +169,12 @@ class _MenuScreenState extends State<MenuScreen> {
     try {
       final supabase = Supabase.instance.client;
       final itemIds = items.map((e) => e.itemId).toSet().toList();
-      final sizeIds = items.map((e) => e.sizeId).where((e) => e != null).cast<int>().toSet().toList();
+      final sizeIds = items
+          .map((e) => e.sizeId)
+          .where((e) => e != null)
+          .cast<int>()
+          .toSet()
+          .toList();
       final extraIds = <int>{};
       for (final it in items) extraIds.addAll(it.extras.keys);
 
@@ -172,6 +183,7 @@ class _MenuScreenState extends State<MenuScreen> {
         final rows = await supabase
             .from('menu_v2_extra_price_by_size')
             .select('size_id, extra_id, price')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('extra_id', 'in', extraIds.toList())
             .filter('size_id', 'in', sizeIds);
         for (final r in (rows as List).cast<Map<String, dynamic>>()) {
@@ -186,6 +198,7 @@ class _MenuScreenState extends State<MenuScreen> {
         final catRows = await supabase
             .from('menu_v2_item')
             .select('id, category_id')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', itemIds);
         for (final r in (catRows as List).cast<Map<String, dynamic>>()) {
           final mid = (r['id'] as int?) ?? 0;
@@ -195,8 +208,10 @@ class _MenuScreenState extends State<MenuScreen> {
       }
       final grouped = <String, List<CartItem>>{};
       for (final it in items) {
-        final sigExtras = it.extras.entries.map((e) => '${e.key}:${e.value}').join(',');
-        final sigOpts = it.options.entries.map((e) => '${e.key}:${e.value}').join(',');
+        final sigExtras =
+            it.extras.entries.map((e) => '${e.key}:${e.value}').join(',');
+        final sigOpts =
+            it.options.entries.map((e) => '${e.key}:${e.value}').join(',');
         final key = '${it.itemId}|${it.size}|$sigExtras|$sigOpts';
         grouped.putIfAbsent(key, () => []).add(it);
       }
@@ -209,19 +224,38 @@ class _MenuScreenState extends State<MenuScreen> {
           final price = extraPriceMap['${first.sizeId}|${e.key}'] ?? 0.0;
           unit += price * e.value;
         }
+        final extraLineItems = first.extras.entries
+            .where((e) => e.value > 0)
+            .map((e) => {
+                  'id': e.key,
+                  'quantity': e.value,
+                  'unit_price':
+                      extraPriceMap['${first.sizeId}|${e.key}'] ?? 0.0,
+                })
+            .toList();
         final count = entry.value.length;
         rawSum += unit * count;
         cartList.add({
           'id': first.itemId,
           'category_id': itemIdToCategory[first.itemId],
           'size_id': first.sizeId,
+          'extra_ids': first.extras.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toList(),
+          'modifier_option_ids': first.options.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toList(),
+          'extra_line_items': extraLineItems,
           'price': unit,
           'quantity': count,
         });
       }
       DiscountResult? dres;
       try {
-        dres = await calculateDiscountedTotal(cartItems: cartList, subtotal: rawSum);
+        dres = await calculateDiscountedTotal(
+            cartItems: cartList, subtotal: rawSum);
       } catch (_) {}
       if (!mounted) return;
       setState(() {
@@ -248,7 +282,8 @@ class _MenuScreenState extends State<MenuScreen> {
       final desc = (m.description ?? '').toLowerCase();
       return name.contains(q) || desc.contains(q);
     }).toList();
-    filtered.sort((a, b) => _relevanceScore(b, q).compareTo(_relevanceScore(a, q)));
+    filtered
+        .sort((a, b) => _relevanceScore(b, q).compareTo(_relevanceScore(a, q)));
     setState(() => _searchResults = filtered);
     _log('search query="$q" results=${filtered.length}');
   }
@@ -286,20 +321,23 @@ class _MenuScreenState extends State<MenuScreen> {
       final swCats = Stopwatch()..start();
       final catData = await _supabase
           .from('menu_v2_category')
-      .select('id,name,description')
-      .eq('is_active', true)
-      .order('sort_order', ascending: true)
-      .order('id', ascending: true);
+          .select('id,name,description,is_active')
+          .eq('restaurant_id', RestaurantContext.current)
+          .order('sort_order', ascending: true)
+          .order('id', ascending: true);
       swCats.stop();
 
       _categories = (catData as List)
+          .cast<Map<String, dynamic>>()
+          .where(MenuVisibilityService.isVisibleEntity)
           .map((m) => Category(
                 id: ((m['id'] as int?) ?? 0),
                 name: (m['name'] as String?) ?? '',
                 description: (m['description'] as String?)?.trim(),
               ))
           .toList();
-      _log('categories loaded: ${_categories.length} in ${swCats.elapsedMilliseconds}ms');
+      _log(
+          'categories loaded: ${_categories.length} in ${swCats.elapsedMilliseconds}ms');
 
       if (_categories.isNotEmpty && _selectedCategoryId == null) {
         _selectedCategoryId = _categories.first.id;
@@ -307,7 +345,7 @@ class _MenuScreenState extends State<MenuScreen> {
 
       // 2) Загрузить ВСЕ позиции меню одним запросом (вместо цикла по категориям) — v2
       final swItems = Stopwatch()..start();
-    final itemsData = await _supabase
+      final itemsData = await _supabase
           .from('menu_v2_item')
           .select('''
             id,
@@ -316,17 +354,23 @@ class _MenuScreenState extends State<MenuScreen> {
             description,
             image_url,
             sku,
-            has_sizes
+            has_sizes,
+            is_active
           ''')
+          .eq('restaurant_id', RestaurantContext.current)
           .order('category_id', ascending: true)
           .order('id', ascending: true);
       swItems.stop();
 
-      final rawItems = (itemsData as List).cast<Map<String, dynamic>>();
-      _log('items loaded: ${rawItems.length} in ${swItems.elapsedMilliseconds}ms');
+      final rawItems = (itemsData as List)
+          .cast<Map<String, dynamic>>()
+          .where(MenuVisibilityService.isVisibleEntity)
+          .toList();
+      _log(
+          'items loaded: ${rawItems.length} in ${swItems.elapsedMilliseconds}ms');
       // Собираем список ID для многоразмерных позиций
       final itemIds = <int>[];
-      final hasMulti = <int, bool>{};       // id -> has_sizes
+      final hasMulti = <int, bool>{}; // id -> has_sizes
       final byCategory = <int, List<Map<String, dynamic>>>{};
 
       for (final e in rawItems) {
@@ -339,14 +383,15 @@ class _MenuScreenState extends State<MenuScreen> {
       }
 
       // 3) Получаем минимальные цены для всех id из единого view menu_v2_item_prices
-  final minPriceMap = <int, double>{};
-  final Map<int, List<Map<String, dynamic>>> priceRowsByItem = {};
+      final minPriceMap = <int, double>{};
+      final Map<int, List<Map<String, dynamic>>> priceRowsByItem = {};
       if (itemIds.isNotEmpty) {
         final swPrices = Stopwatch()..start();
         final inList = '(${itemIds.join(',')})';
         final pricesRaw = await _supabase
             .from('menu_v2_item_prices')
-    .select('item_id, size_id, price')
+            .select('item_id, size_id, price')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('item_id', 'in', inList);
         final castRows = (pricesRaw as List).cast<Map<String, dynamic>>();
         for (final row in castRows) {
@@ -358,12 +403,14 @@ class _MenuScreenState extends State<MenuScreen> {
           if (cur == null || p < cur) minPriceMap[mid] = p;
         }
         swPrices.stop();
-        _log('v2 prices loaded for items=${itemIds.length}, rows=${minPriceMap.length} in ${swPrices.elapsedMilliseconds}ms');
+        _log(
+            'v2 prices loaded for items=${itemIds.length}, rows=${minPriceMap.length} in ${swPrices.elapsedMilliseconds}ms');
       }
 
       // 4) Собираем итоговые объекты MenuItem по категориям
-  final Map<int, List<MenuItem>> itemsByCat = {};
-  final Map<int, int> itemToCategory = {};
+      final Map<int, List<MenuItem>> itemsByCat = {};
+      final List<Category> visibleCategories = [];
+      final Map<int, int> itemToCategory = {};
       _itemToCatId.clear();
       for (final cat in _categories) {
         final rows = byCategory[cat.id] ?? const [];
@@ -383,14 +430,20 @@ class _MenuScreenState extends State<MenuScreen> {
             minPrice: minPrice,
             hasMultipleSizes: hm,
             singleSizePrice: hm ? null : minPrice,
+            isActive: (e['is_active'] as bool?) ?? true,
+            isDeleted: (e['is_deleted'] as bool?) ?? false,
           ));
         }
-        itemsByCat[cat.id] = list;
+        if (list.isNotEmpty) {
+          itemsByCat[cat.id] = list;
+          visibleCategories.add(cat);
+        }
       }
 
       // 4.1) Рассчитываем минимальную промо-цену для каждой позиции
       final promotions = await getCachedPromotions(now: DateTime.now());
       final Map<int, PromotionPrice> itemPromoSummary = {};
+      final Map<int, String> itemPromoHint = {};
       for (final entry in priceRowsByItem.entries) {
         final itemId = entry.key;
         final catId = itemToCategory[itemId];
@@ -414,7 +467,8 @@ class _MenuScreenState extends State<MenuScreen> {
           );
           if (best == null ||
               info.finalPrice < best.finalPrice - 0.0005 ||
-              ((info.finalPrice - best.finalPrice).abs() <= 0.0005 && info.discountAmount > best.discountAmount)) {
+              ((info.finalPrice - best.finalPrice).abs() <= 0.0005 &&
+                  info.discountAmount > best.discountAmount)) {
             best = info;
           }
         }
@@ -432,6 +486,16 @@ class _MenuScreenState extends State<MenuScreen> {
             );
           }
         }
+
+        final hint = _scopedPromotionHintForMenuItem(
+          promotions: promotions,
+          itemId: itemId,
+          categoryId: catId,
+          priceRows: rows,
+        );
+        if (hint != null) {
+          itemPromoHint[itemId] = hint;
+        }
       }
 
       // Подготовим результаты поиска, если поле поиска уже заполнено во время загрузки
@@ -444,19 +508,25 @@ class _MenuScreenState extends State<MenuScreen> {
           final desc = (m.description ?? '').toLowerCase();
           return name.contains(query) || desc.contains(query);
         }).toList();
-        updatedSearch.sort((a, b) => _relevanceScore(b, query).compareTo(_relevanceScore(a, query)));
+        updatedSearch.sort((a, b) =>
+            _relevanceScore(b, query).compareTo(_relevanceScore(a, query)));
       }
 
       if (!mounted) return;
       setState(() {
+        _categories = visibleCategories;
         _itemsByCat = itemsByCat;
         _searchResults = updatedSearch;
         _loading = false;
         _itemPromoSummary
           ..clear()
           ..addAll(itemPromoSummary);
+        _itemPromoHint
+          ..clear()
+          ..addAll(itemPromoHint);
         // Гарантированная инициализация видимых узлов
-        if (_selectedCategoryId != null && _itemsByCat[_selectedCategoryId!] != null) {
+        if (_selectedCategoryId != null &&
+            _itemsByCat[_selectedCategoryId!] != null) {
           _visibleCategoryIds = [_selectedCategoryId!];
           _visibleNodes = _buildNodesForCategory(_selectedCategoryId!);
         } else if (_categories.isNotEmpty) {
@@ -468,7 +538,8 @@ class _MenuScreenState extends State<MenuScreen> {
       });
       final totalItems = itemsByCat.values.fold<int>(0, (p, e) => p + e.length);
       swTotal.stop();
-      _log('loadMenu: ready categories=${_categories.length}, totalItems=$totalItems in ${swTotal.elapsedMilliseconds}ms');
+      _log(
+          'loadMenu: ready categories=${_categories.length}, totalItems=$totalItems in ${swTotal.elapsedMilliseconds}ms');
     } catch (err) {
       setState(() {
         _error = err.toString();
@@ -481,25 +552,29 @@ class _MenuScreenState extends State<MenuScreen> {
   @override
   Widget build(BuildContext context) {
     final appTheme = ThemeProvider.of(context);
-    final bool searchActive = _showSearch && _searchController.text.trim().isNotEmpty;
+    final bool searchActive =
+        _showSearch && _searchController.text.trim().isNotEmpty;
     final hasCategories = _categories.isNotEmpty;
     _buildCount++;
     if (_buildCount <= 3) {
-  _log('build #$_buildCount loading=$_loading searchActive=$searchActive cats=${_categories.length} visibleNodes=${_visibleNodes.length}');
+      _log(
+          'build #$_buildCount loading=$_loading searchActive=$searchActive cats=${_categories.length} visibleNodes=${_visibleNodes.length}');
     }
 
     // (убрано) Ранее здесь была build-time "страховка" с setState в post-frame.
     // Оставляем инициализацию строго в _loadMenu и (для hot reload) в reassemble().
 
     // отступ снизу под нижний NavigationBar
-    final bottomPadding = MediaQuery.of(context).padding.bottom + kBottomNavigationBarHeight;
+    final bottomPadding =
+        MediaQuery.of(context).padding.bottom + kBottomNavigationBarHeight;
 
     return Scaffold(
       backgroundColor: appTheme.backgroundColor,
       appBar: AppBar(
         backgroundColor: appTheme.backgroundColor,
         leading: IconButton(
-          icon: Icon(_showSearch ? Icons.close : Icons.search, color: appTheme.iconColor),
+          icon: Icon(_showSearch ? Icons.close : Icons.search,
+              color: appTheme.iconColor),
           onPressed: () {
             setState(() {
               _showSearch = !_showSearch;
@@ -510,7 +585,8 @@ class _MenuScreenState extends State<MenuScreen> {
             });
           },
         ),
-        title: Text('Menü', style: GoogleFonts.fredokaOne(color: appTheme.primaryColor)),
+        title: Text('Menü',
+            style: GoogleFonts.fredokaOne(color: appTheme.primaryColor)),
         centerTitle: true,
         automaticallyImplyLeading: false,
         elevation: 0,
@@ -531,9 +607,14 @@ class _MenuScreenState extends State<MenuScreen> {
                       top: 6,
                       child: Container(
                         padding: const EdgeInsets.all(2),
-                        decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                        constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                        child: Text('$cartCount', style: const TextStyle(color: Colors.white, fontSize: 10), textAlign: TextAlign.center),
+                        decoration: const BoxDecoration(
+                            color: Colors.red, shape: BoxShape.circle),
+                        constraints:
+                            const BoxConstraints(minWidth: 16, minHeight: 16),
+                        child: Text('$cartCount',
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 10),
+                            textAlign: TextAlign.center),
                       ),
                     ),
                 ],
@@ -549,31 +630,42 @@ class _MenuScreenState extends State<MenuScreen> {
                   width: double.infinity,
                   decoration: BoxDecoration(
                     color: Colors.redAccent.withOpacity(0.12),
-                    border: Border(top: BorderSide(color: Colors.redAccent.withOpacity(0.35), width: 0.8)),
+                    border: Border(
+                        top: BorderSide(
+                            color: Colors.redAccent.withOpacity(0.35),
+                            width: 0.8)),
                   ),
                   alignment: Alignment.center,
                   child: _computingCartTotal
-                      ? Text('Prüfe Mindestbestellwert…', style: GoogleFonts.poppins(color: Colors.redAccent, fontSize: 11))
+                      ? Text('Prüfe Mindestbestellwert…',
+                          style: GoogleFonts.poppins(
+                              color: Colors.redAccent, fontSize: 11))
                       : Text(
                           'Noch €${(_minOrderAmount! - _discountedCartTotal).clamp(0, _minOrderAmount!).toStringAsFixed(2)} bis Mindestbestellwert (€${_minOrderAmount!.toStringAsFixed(2)})',
-                          style: GoogleFonts.poppins(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                          style: GoogleFonts.poppins(
+                              color: Colors.redAccent,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600),
                         ),
                 ),
               )
             : null,
       ),
       body: _loading
-          ? Center(child: CircularProgressIndicator(color: appTheme.primaryColor))
+          ? Center(
+              child: CircularProgressIndicator(color: appTheme.primaryColor))
           : _error != null
               ? NoInternetWidget(
                   onRetry: () => _loadMenu(showFullScreenLoader: true),
-                  errorText: _error?.contains('SocketException') == true || _error == 'Нет подключения к интернету'
+                  errorText: _error?.contains('SocketException') == true ||
+                          _error == 'Нет подключения к интернету'
                       ? 'Keine Internetverbindung'
                       : _error,
                 )
               : CustomScrollView(
                   controller: _scrollController,
-                  physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+                  physics: const BouncingScrollPhysics(
+                      parent: AlwaysScrollableScrollPhysics()),
                   slivers: [
                     const SliverToBoxAdapter(child: SizedBox(height: 12)),
                     if (_showSearch)
@@ -589,11 +681,14 @@ class _MenuScreenState extends State<MenuScreen> {
                               style: const TextStyle(color: Colors.white),
                               decoration: InputDecoration(
                                 hintText: 'Suche Pizza…',
-                                hintStyle: const TextStyle(color: Colors.white54),
-                                prefixIcon: const Icon(Icons.search, color: Colors.white54),
+                                hintStyle:
+                                    const TextStyle(color: Colors.white54),
+                                prefixIcon: const Icon(Icons.search,
+                                    color: Colors.white54),
                                 filled: true,
                                 fillColor: Colors.white10,
-                                contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    vertical: 0, horizontal: 16),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(30),
                                   borderSide: BorderSide.none,
@@ -603,9 +698,11 @@ class _MenuScreenState extends State<MenuScreen> {
                           ),
                         ),
                       ),
-                    if (_showSearch) const SliverToBoxAdapter(child: SizedBox(height: 12)),
+                    if (_showSearch)
+                      const SliverToBoxAdapter(child: SizedBox(height: 12)),
                     if (searchActive)
-                      ..._buildSearchResults(appTheme, _searchResults, bottomPadding)
+                      ..._buildSearchResults(
+                          appTheme, _searchResults, bottomPadding)
                     else ...[
                       if (hasCategories)
                         SliverAppBar(
@@ -622,19 +719,24 @@ class _MenuScreenState extends State<MenuScreen> {
                             onOpenPicker: _openCategoryPicker,
                           ),
                         ),
-                      if (hasCategories) const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                      if (hasCategories)
+                        const SliverToBoxAdapter(child: SizedBox(height: 8)),
                       if (!hasCategories)
                         SliverPadding(
-                          padding: EdgeInsets.only(left: 20, right: 20, bottom: bottomPadding + 40),
+                          padding: EdgeInsets.only(
+                              left: 20, right: 20, bottom: bottomPadding + 40),
                           sliver: SliverToBoxAdapter(
                             child: _buildEmptyState(
                               appTheme: appTheme,
                               title: 'Keine Kategorien',
-                              subtitle: 'Wir arbeiten daran, das Menü zu aktualisieren. Bitte versuchen Sie es später erneut.',
+                              subtitle:
+                                  'Wir arbeiten daran, das Menü zu aktualisieren. Bitte versuchen Sie es später erneut.',
                             ),
                           ),
                         )
-                      else ..._buildVisibleContent(context, appTheme, bottomPadding),
+                      else
+                        ..._buildVisibleContent(
+                            context, appTheme, bottomPadding),
                     ],
                   ],
                 ),
@@ -650,117 +752,133 @@ class _MenuScreenState extends State<MenuScreen> {
     required VoidCallback onOpenPicker,
   }) {
     return Container(
-      key: _tabsRowKey,
-      child: Row(
-      children: [
-        Expanded(
-          child: ShaderMask(
-            shaderCallback: (Rect rect) {
-              // Маска: большая часть строки непрозрачна, правый край плавно в ноль
-              return const LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [
-                  Colors.white,
-                  Colors.white,
-                  Colors.transparent,
-                ],
-                // Сделал fade шире и мягче (последние ~22%)
-                stops: [0.0, 0.78, 1.0],
-              ).createShader(rect);
-            },
-            blendMode: BlendMode.dstIn,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              controller: _catScrollController,
-              child: Row(
-                children: categories.map((cat) {
-                  final bool isSelected = cat.id == selectedCategoryId;
-                  final key = _catKeys.putIfAbsent(cat.id, () => GlobalKey());
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 10),
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        key: key,
-                        borderRadius: BorderRadius.circular(26),
-                        onTap: () => onSelectCategory(cat.id),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 220),
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                          decoration: BoxDecoration(
+        key: _tabsRowKey,
+        child: Row(
+          children: [
+            Expanded(
+              child: ShaderMask(
+                shaderCallback: (Rect rect) {
+                  // Маска: большая часть строки непрозрачна, правый край плавно в ноль
+                  return const LinearGradient(
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                    colors: [
+                      Colors.white,
+                      Colors.white,
+                      Colors.transparent,
+                    ],
+                    // Сделал fade шире и мягче (последние ~22%)
+                    stops: [0.0, 0.78, 1.0],
+                  ).createShader(rect);
+                },
+                blendMode: BlendMode.dstIn,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  controller: _catScrollController,
+                  child: Row(
+                    children: categories.map((cat) {
+                      final bool isSelected = cat.id == selectedCategoryId;
+                      final key =
+                          _catKeys.putIfAbsent(cat.id, () => GlobalKey());
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 10),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            key: key,
                             borderRadius: BorderRadius.circular(26),
-                            gradient: isSelected
-                                ? LinearGradient(
-                                    colors: [appTheme.primaryColor, const Color(0xFFFF8A65)],
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                  )
-                                : null,
-                            color: isSelected ? null : appTheme.cardColor.withValues(alpha: 0.9),
-                            border: Border.all(
-                              color: isSelected ? Colors.transparent : Colors.white.withValues(alpha: 0.12),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                cat.name,
-                                style: GoogleFonts.poppins(
-                                  color: isSelected ? Colors.white : appTheme.textColor,
-                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                                  fontSize: 14,
+                            onTap: () => onSelectCategory(cat.id),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 220),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 20, vertical: 12),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(26),
+                                gradient: isSelected
+                                    ? LinearGradient(
+                                        colors: [
+                                          appTheme.primaryColor,
+                                          const Color(0xFFFF8A65)
+                                        ],
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                      )
+                                    : null,
+                                color: isSelected
+                                    ? null
+                                    : appTheme.cardColor.withValues(alpha: 0.9),
+                                border: Border.all(
+                                  color: isSelected
+                                      ? Colors.transparent
+                                      : Colors.white.withValues(alpha: 0.12),
                                 ),
                               ),
-                            ],
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    cat.name,
+                                    style: GoogleFonts.poppins(
+                                      color: isSelected
+                                          ? Colors.white
+                                          : appTheme.textColor,
+                                      fontWeight: isSelected
+                                          ? FontWeight.w600
+                                          : FontWeight.w500,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                    ),
-                  );
-                }).toList(),
+                      );
+                    }).toList(),
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(20),
-            onTap: onOpenPicker,
-            child: Container(
-              width: 44,
-              height: 44,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.14),
-                shape: BoxShape.circle,
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: onOpenPicker,
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.14),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(Icons.list, color: appTheme.iconColor, size: 22),
+                ),
               ),
-              child: Icon(Icons.list, color: appTheme.iconColor, size: 22),
             ),
-          ),
-        ),
-      ],
-    ));
+          ],
+        ));
   }
 
   // (iOS fallback helper удалён, используем один pinned header на всех платформах)
 
   // Контент: единый непрерывный список из _visibleNodes (заголовки + элементы)
-  List<Widget> _buildVisibleContent(BuildContext context, AppTheme appTheme, double bottomPadding) {
+  List<Widget> _buildVisibleContent(
+      BuildContext context, AppTheme appTheme, double bottomPadding) {
     final nodes = _visibleNodes;
     _log('build visible content: nodes=${nodes.length}');
     if (nodes.isEmpty) {
       return [
         SliverPadding(
-          padding: EdgeInsets.only(left: 20, right: 20, top: 32, bottom: bottomPadding + 60),
+          padding: EdgeInsets.only(
+              left: 20, right: 20, top: 32, bottom: bottomPadding + 60),
           sliver: SliverToBoxAdapter(
             child: _buildEmptyState(
               appTheme: appTheme,
               title: 'Keine Artikel',
-              subtitle: 'In dieser Kategorie sind derzeit keine Gerichte verfügbar.',
+              subtitle:
+                  'In dieser Kategorie sind derzeit keine Gerichte verfügbar.',
             ),
           ),
         ),
@@ -776,8 +894,10 @@ class _MenuScreenState extends State<MenuScreen> {
             (context, index) {
               final node = nodes[index];
               if (node.type == _NodeType.header) {
-                final cat = _categories.firstWhere((c) => c.id == node.categoryId);
-                final key = _categoryHeaderKeys.putIfAbsent(cat.id, () => GlobalKey());
+                final cat =
+                    _categories.firstWhere((c) => c.id == node.categoryId);
+                final key =
+                    _categoryHeaderKeys.putIfAbsent(cat.id, () => GlobalKey());
                 return Padding(
                   key: key,
                   padding: const EdgeInsets.fromLTRB(4, 16, 4, 8),
@@ -787,11 +907,13 @@ class _MenuScreenState extends State<MenuScreen> {
               final item = node.item!;
               if (index == 0) _log('first list node built: item id=${item.id}');
               return Padding(
-                padding: EdgeInsets.only(bottom: index == nodes.length - 1 ? 0 : 16),
+                padding:
+                    EdgeInsets.only(bottom: index == nodes.length - 1 ? 0 : 16),
                 child: MenuItemTile(
                   item: item,
                   layout: MenuItemTileLayout.list,
                   priceInfo: _itemPromoSummary[item.id],
+                  promotionHint: _itemPromoHint[item.id],
                   showImage: false,
                   onTap: () => _openMenuItem(item),
                 ),
@@ -837,7 +959,8 @@ class _MenuScreenState extends State<MenuScreen> {
     if (!_scrollController.hasClients) return;
 
     final now = DateTime.now();
-    if (_lastScrollCheck != null && now.difference(_lastScrollCheck!).inMilliseconds < 120) {
+    if (_lastScrollCheck != null &&
+        now.difference(_lastScrollCheck!).inMilliseconds < 120) {
       return; // троттлинг
     }
     _lastScrollCheck = now;
@@ -857,7 +980,8 @@ class _MenuScreenState extends State<MenuScreen> {
       if (tabsCtx == null) return;
       final tabsBox = tabsCtx.findRenderObject() as RenderBox?;
       if (tabsBox == null) return;
-      final tabsBottomGlobal = tabsBox.localToGlobal(Offset(0, tabsBox.size.height)).dy;
+      final tabsBottomGlobal =
+          tabsBox.localToGlobal(Offset(0, tabsBox.size.height)).dy;
 
       int? activeId;
       for (final catId in _visibleCategoryIds) {
@@ -878,7 +1002,8 @@ class _MenuScreenState extends State<MenuScreen> {
         setState(() {
           _selectedCategoryId = activeId;
         });
-        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollCategoryTabIntoView(activeId!));
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _scrollCategoryTabIntoView(activeId!));
       }
     } catch (_) {
       // ignore
@@ -907,7 +1032,8 @@ class _MenuScreenState extends State<MenuScreen> {
           _selectedCategoryId = nextCat.id; // обновим активную вкладку
         });
         _isAppending = false;
-        _log('append category ${nextCat.id} -> visibleNodes=${_visibleNodes.length}');
+        _log(
+            'append category ${nextCat.id} -> visibleNodes=${_visibleNodes.length}');
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _scrollCategoryTabIntoView(nextCat.id);
         });
@@ -918,7 +1044,9 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   void _startFromCategory(int categoryId) {
-    if (_selectedCategoryId == categoryId && _visibleCategoryIds.isNotEmpty && _visibleCategoryIds.first == categoryId) {
+    if (_selectedCategoryId == categoryId &&
+        _visibleCategoryIds.isNotEmpty &&
+        _visibleCategoryIds.first == categoryId) {
       // уже в нужном состоянии
       return;
     }
@@ -933,7 +1061,8 @@ class _MenuScreenState extends State<MenuScreen> {
     });
     // прокрутка к началу
     if (_scrollController.hasClients) {
-      _scrollController.animateTo(0, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+      _scrollController.animateTo(0,
+          duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
     }
     _log('startFromCategory $categoryId nodes=${_visibleNodes.length}');
   }
@@ -946,13 +1075,16 @@ class _MenuScreenState extends State<MenuScreen> {
 
     try {
       final box = context.findRenderObject() as RenderBox?;
-      final scrollBox = _catScrollController.position.context.storageContext.findRenderObject() as RenderBox?;
+      final scrollBox = _catScrollController.position.context.storageContext
+          .findRenderObject() as RenderBox?;
       if (box == null || scrollBox == null) return;
 
       final itemGlobal = box.localToGlobal(Offset.zero);
       final scrollGlobal = scrollBox.localToGlobal(Offset.zero);
-      final dx = itemGlobal.dx - scrollGlobal.dx; // расстояние от левого края вьюпорта
-      final targetOffset = (_catScrollController.offset + dx - 12).clamp(0.0, _catScrollController.position.maxScrollExtent);
+      final dx =
+          itemGlobal.dx - scrollGlobal.dx; // расстояние от левого края вьюпорта
+      final targetOffset = (_catScrollController.offset + dx - 12)
+          .clamp(0.0, _catScrollController.position.maxScrollExtent);
       _catScrollController.animateTo(
         targetOffset,
         duration: const Duration(milliseconds: 250),
@@ -960,7 +1092,8 @@ class _MenuScreenState extends State<MenuScreen> {
       );
     } catch (_) {
       // В крайнем случае — просто ensureVisible
-      Scrollable.ensureVisible(context, alignment: 0.0, duration: const Duration(milliseconds: 250));
+      Scrollable.ensureVisible(context,
+          alignment: 0.0, duration: const Duration(milliseconds: 250));
     }
   }
 
@@ -975,6 +1108,65 @@ class _MenuScreenState extends State<MenuScreen> {
       nodes.add(_VisibleNode.item(categoryId, it));
     }
     return nodes;
+  }
+
+  String? _scopedPromotionHintForMenuItem({
+    required List<Promotion> promotions,
+    required int itemId,
+    required int? categoryId,
+    required List<Map<String, dynamic>> priceRows,
+  }) {
+    final sizeIds = <int>{
+      for (final row in priceRows)
+        if ((row['size_id'] as int?) != null && (row['size_id'] as int) != 0)
+          row['size_id'] as int,
+    };
+
+    bool hasExtraScoped = false;
+    bool hasModifierScoped = false;
+
+    bool sizeMatches(int? targetSizeId) {
+      if (targetSizeId == null || targetSizeId == 0) return true;
+      return sizeIds.contains(targetSizeId);
+    }
+
+    for (final promo in promotions) {
+      for (final target in promo.targets) {
+        switch (target.targetType) {
+          case 'item_size_extra':
+            if (target.itemId == itemId && sizeMatches(target.sizeId)) {
+              hasExtraScoped = true;
+            }
+            break;
+          case 'item_size_modifier':
+            if (target.itemId == itemId && sizeMatches(target.sizeId)) {
+              hasModifierScoped = true;
+            }
+            break;
+          case 'category_size_extra':
+            if (categoryId != null &&
+                target.categoryId == categoryId &&
+                sizeMatches(target.sizeId)) {
+              hasExtraScoped = true;
+            }
+            break;
+          case 'category_size_modifier':
+            if (categoryId != null &&
+                target.categoryId == categoryId &&
+                sizeMatches(target.sizeId)) {
+              hasModifierScoped = true;
+            }
+            break;
+        }
+        if (hasExtraScoped && hasModifierScoped) {
+          return 'Rabatt bei Extras & Optionen';
+        }
+      }
+    }
+
+    if (hasExtraScoped) return 'Rabatt bei bestimmten Extras';
+    if (hasModifierScoped) return 'Rabatt bei bestimmten Optionen';
+    return null;
   }
 
   void _openCategoryPicker() async {
@@ -1003,7 +1195,8 @@ class _MenuScreenState extends State<MenuScreen> {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
                   children: [
                     Icon(Icons.list, color: appTheme.primaryColor),
@@ -1023,20 +1216,26 @@ class _MenuScreenState extends State<MenuScreen> {
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: _categories.length,
-                  separatorBuilder: (_, __) => Divider(color: Colors.white.withValues(alpha: 0.06), height: 1),
+                  separatorBuilder: (_, __) => Divider(
+                      color: Colors.white.withValues(alpha: 0.06), height: 1),
                   itemBuilder: (_, i) {
                     final c = _categories[i];
                     final selected = c.id == _selectedCategoryId;
                     return ListTile(
                       leading: Icon(
-                        selected ? Icons.radio_button_checked : Icons.radio_button_off,
-                        color: selected ? appTheme.primaryColor : appTheme.textColorSecondary,
+                        selected
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off,
+                        color: selected
+                            ? appTheme.primaryColor
+                            : appTheme.textColorSecondary,
                       ),
                       title: Text(
                         c.name,
                         style: GoogleFonts.poppins(
                           color: appTheme.textColor,
-                          fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                          fontWeight:
+                              selected ? FontWeight.w600 : FontWeight.w500,
                         ),
                       ),
                       onTap: () => Navigator.of(ctx).pop(c.id),
@@ -1057,15 +1256,13 @@ class _MenuScreenState extends State<MenuScreen> {
     }
   }
 
-  
-
-  
-
-  List<Widget> _buildSearchResults(AppTheme appTheme, List<MenuItem> items, double bottomPadding) {
+  List<Widget> _buildSearchResults(
+      AppTheme appTheme, List<MenuItem> items, double bottomPadding) {
     if (items.isEmpty) {
       return [
         SliverPadding(
-          padding: EdgeInsets.only(left: 20, right: 20, top: 16, bottom: bottomPadding + 60),
+          padding: EdgeInsets.only(
+              left: 20, right: 20, top: 16, bottom: bottomPadding + 60),
           sliver: SliverToBoxAdapter(
             child: _buildEmptyState(
               appTheme: appTheme,
@@ -1085,7 +1282,8 @@ class _MenuScreenState extends State<MenuScreen> {
             (context, index) {
               final item = items[index];
               return Padding(
-                padding: EdgeInsets.only(bottom: index == items.length - 1 ? 0 : 16),
+                padding:
+                    EdgeInsets.only(bottom: index == items.length - 1 ? 0 : 16),
                 child: SearchResultTile(
                   item: item,
                   query: _searchController.text.trim(),
@@ -1094,11 +1292,13 @@ class _MenuScreenState extends State<MenuScreen> {
                     if (catId == null) return null;
                     final cat = _categories.firstWhere(
                       (c) => c.id == catId,
-                      orElse: () => Category(id: -1, name: '', description: null),
+                      orElse: () =>
+                          Category(id: -1, name: '', description: null),
                     );
                     return cat.id == -1 || cat.name.isEmpty ? null : cat.name;
                   }(),
                   priceInfo: _itemPromoSummary[item.id],
+                  promotionHint: _itemPromoHint[item.id],
                   onTap: () => _openMenuItem(item),
                 ),
               );
@@ -1135,7 +1335,8 @@ class _MenuScreenState extends State<MenuScreen> {
                 colors: [appTheme.primaryColor, const Color(0xFFFF8A65)],
               ),
             ),
-            child: const Icon(Icons.restaurant_menu, color: Colors.white, size: 30),
+            child: const Icon(Icons.restaurant_menu,
+                color: Colors.white, size: 30),
           ),
           const SizedBox(height: 16),
           Text(
@@ -1160,8 +1361,6 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
 
-  
-
   Future<void> _openMenuItem(MenuItem summary) async {
     if (!mounted) return;
     // Пытаемся сопоставить с бандлом по SKU (article) или по точному имени
@@ -1173,12 +1372,14 @@ class _MenuScreenState extends State<MenuScreen> {
         row = await _supabase
             .from('menu_v2_bundle')
             .select('id')
+            .eq('restaurant_id', RestaurantContext.current)
             .eq('sku', sku)
             .maybeSingle();
       }
       row ??= await _supabase
           .from('menu_v2_bundle')
           .select('id')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('name', summary.name)
           .maybeSingle();
       bundleId = row != null ? (row['id'] as int?) : null;
@@ -1205,489 +1406,532 @@ class _MenuScreenState extends State<MenuScreen> {
     setState(() {});
   }
 }
+
 void _log(String msg) {
   if (!_MenuScreenState._kLog) return;
   final ts = DateTime.now().toIso8601String();
   debugPrint('[Menu][$ts] $msg');
 }
-  enum MenuItemTileLayout { list, grid }
 
-  class MenuItemTile extends StatelessWidget {
-    final MenuItem item;
-    final MenuItemTileLayout layout;
-    final PromotionPrice? priceInfo;
-    final VoidCallback onTap;
-    // When false, completely hide the media section (image/placeholder)
-    // to make room for longer titles and compact cards.
-    final bool showImage;
+enum MenuItemTileLayout { list, grid }
 
-    const MenuItemTile({
-      super.key,
-      required this.item,
-      required this.layout,
-      this.priceInfo,
-      required this.onTap,
-      this.showImage = true,
-    });
+class MenuItemTile extends StatelessWidget {
+  final MenuItem item;
+  final MenuItemTileLayout layout;
+  final PromotionPrice? priceInfo;
+  final String? promotionHint;
+  final VoidCallback onTap;
+  // When false, completely hide the media section (image/placeholder)
+  // to make room for longer titles and compact cards.
+  final bool showImage;
 
-    @override
-    Widget build(BuildContext context) {
-      final appTheme = ThemeProvider.of(context);
-      final bool isGrid = layout == MenuItemTileLayout.grid;
-      final bool hasImage = item.imageUrl?.isNotEmpty == true;
-      // Show the media section if showImage=true (even if there is no actual
-      // image, we'll render a graceful placeholder). If showImage=false, we
-      // skip the media entirely for a denser layout.
-      final bool showMediaSection = showImage;
-      final BorderRadius borderRadius = BorderRadius.circular(isGrid ? 22 : 20);
+  const MenuItemTile({
+    super.key,
+    required this.item,
+    required this.layout,
+    this.priceInfo,
+    this.promotionHint,
+    required this.onTap,
+    this.showImage = true,
+  });
 
-      return Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: borderRadius,
-            onTap: onTap,
-          child: Ink(
-            decoration: BoxDecoration(
-              color: appTheme.cardColor.withValues(alpha: isGrid ? 0.96 : 0.92),
-              borderRadius: borderRadius,
-              border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.18),
-                  blurRadius: 20,
-                  offset: const Offset(0, 12),
-                ),
-              ],
-            ),
-            child: Padding(
-              padding: EdgeInsets.all(isGrid ? 16 : 18),
-              child: isGrid
-                  ? _buildGridLayout(appTheme, showMediaSection, hasImage, borderRadius)
-                  : _buildListLayout(appTheme, showMediaSection, hasImage, borderRadius),
-            ),
-          ),
-        ),
-      );
-    }
+  @override
+  Widget build(BuildContext context) {
+    final appTheme = ThemeProvider.of(context);
+    final bool isGrid = layout == MenuItemTileLayout.grid;
+    final bool hasImage = item.imageUrl?.isNotEmpty == true;
+    // Show the media section if showImage=true (even if there is no actual
+    // image, we'll render a graceful placeholder). If showImage=false, we
+    // skip the media entirely for a denser layout.
+    final bool showMediaSection = showImage;
+    final BorderRadius borderRadius = BorderRadius.circular(isGrid ? 22 : 20);
 
-    Widget _buildListLayout(
-      AppTheme appTheme,
-      bool showMediaSection,
-      bool hasImage,
-      BorderRadius borderRadius,
-    ) {
-      final priceContent = _buildPriceContent(appTheme);
-      if (showMediaSection) {
-        // Original layout with media on the left
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildMedia(
-              appTheme,
-              hasImage,
-              borderRadius,
-              width: 118,
-              height: 112,
-              isGrid: false,
-            ),
-            const SizedBox(width: 18),
-            Expanded(
-              child: SizedBox(
-                height: 112,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (item.article != null && item.article!.isNotEmpty)
-                      Text(
-                        'Art.Nr. ${item.article}',
-                        style: GoogleFonts.poppins(
-                          color: appTheme.primaryColor.withValues(alpha: 0.9),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    Text(
-                      item.name,
-                      style: GoogleFonts.poppins(
-                        color: appTheme.textColor,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (item.description != null && item.description!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          item.description!,
-                          style: GoogleFonts.poppins(
-                            color: appTheme.textColorSecondary,
-                            fontSize: 13,
-                          ),
-                          // Увеличиваем макс. строки и позволяем переносы \n
-                          maxLines: 4,
-                          overflow: TextOverflow.ellipsis,
-                          softWrap: true,
-                        ),
-                      ),
-                    const Spacer(),
-                    Row(
-                      children: [
-                        if (priceContent != null)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: appTheme.primaryColor.withValues(alpha: 0.16),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: priceContent,
-                          ),
-                        const Spacer(),
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Icon(
-                            Icons.arrow_forward_ios,
-                            size: 14,
-                            color: appTheme.primaryColor,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
-      }
-
-      // Compact layout without media, allowing longer titles to wrap
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (item.article != null && item.article!.isNotEmpty)
-            Text(
-              'Art.Nr. ${item.article}',
-              style: GoogleFonts.poppins(
-                color: appTheme.primaryColor.withValues(alpha: 0.9),
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          Text(
-            item.name,
-            style: GoogleFonts.poppins(
-              color: appTheme.textColor,
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-            ),
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            softWrap: true,
-          ),
-          if (item.description != null && item.description!.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                item.description!,
-                style: GoogleFonts.poppins(
-                  color: appTheme.textColorSecondary,
-                  fontSize: 13,
-                ),
-                maxLines: 6,
-                overflow: TextOverflow.ellipsis,
-                softWrap: true,
-              ),
-            ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              if (priceContent != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: appTheme.primaryColor.withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: priceContent,
-                ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  Icons.arrow_forward_ios,
-                  size: 14,
-                  color: appTheme.primaryColor,
-                ),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: borderRadius,
+        onTap: onTap,
+        child: Ink(
+          decoration: BoxDecoration(
+            color: appTheme.cardColor.withValues(alpha: isGrid ? 0.96 : 0.92),
+            borderRadius: borderRadius,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.18),
+                blurRadius: 20,
+                offset: const Offset(0, 12),
               ),
             ],
+          ),
+          child: Padding(
+            padding: EdgeInsets.all(isGrid ? 16 : 18),
+            child: isGrid
+                ? _buildGridLayout(
+                    appTheme, showMediaSection, hasImage, borderRadius)
+                : _buildListLayout(
+                    appTheme, showMediaSection, hasImage, borderRadius),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildListLayout(
+    AppTheme appTheme,
+    bool showMediaSection,
+    bool hasImage,
+    BorderRadius borderRadius,
+  ) {
+    final priceContent = _buildPriceContent(appTheme);
+    if (showMediaSection) {
+      // Original layout with media on the left
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildMedia(
+            appTheme,
+            hasImage,
+            borderRadius,
+            width: 118,
+            height: 112,
+            isGrid: false,
+          ),
+          const SizedBox(width: 18),
+          Expanded(
+            child: SizedBox(
+              height: 112,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (item.article != null && item.article!.isNotEmpty)
+                    Text(
+                      'Art.Nr. ${item.article}',
+                      style: GoogleFonts.poppins(
+                        color: appTheme.primaryColor.withValues(alpha: 0.9),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  Text(
+                    item.name,
+                    style: GoogleFonts.poppins(
+                      color: appTheme.textColor,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (item.description != null && item.description!.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        item.description!,
+                        style: GoogleFonts.poppins(
+                          color: appTheme.textColorSecondary,
+                          fontSize: 13,
+                        ),
+                        // Увеличиваем макс. строки и позволяем переносы \n
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: true,
+                      ),
+                    ),
+                  if (promotionHint != null && promotionHint!.trim().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: _buildPromotionHintChip(appTheme),
+                    ),
+                  const Spacer(),
+                  Row(
+                    children: [
+                      if (priceContent != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color:
+                                appTheme.primaryColor.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: priceContent,
+                        ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          Icons.arrow_forward_ios,
+                          size: 14,
+                          color: appTheme.primaryColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       );
     }
 
-    Widget _buildGridLayout(
-      AppTheme appTheme,
-      bool showMediaSection,
-      bool hasImage,
-      BorderRadius borderRadius,
-    ) {
-        final priceContent = _buildPriceContent(appTheme, fontSize: 14);
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (showMediaSection) ...[
-            _buildMedia(
-              appTheme,
-              hasImage,
-              borderRadius,
-              width: double.infinity,
-              height: 150,
-              isGrid: true,
-            ),
-            const SizedBox(height: 14),
-          ],
-          if (item.article != null && item.article!.isNotEmpty)
-            Text(
-              'Art.Nr. ${item.article}',
-              style: GoogleFonts.poppins(
-                color: appTheme.primaryColor.withValues(alpha: 0.9),
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
+    // Compact layout without media, allowing longer titles to wrap
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (item.article != null && item.article!.isNotEmpty)
           Text(
-            item.name,
+            'Art.Nr. ${item.article}',
             style: GoogleFonts.poppins(
-              color: appTheme.textColor,
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
+              color: appTheme.primaryColor.withValues(alpha: 0.9),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
             ),
-            maxLines: showMediaSection ? 2 : 3,
-            overflow: TextOverflow.ellipsis,
-            softWrap: true,
           ),
-          const SizedBox(height: 6),
-          if (item.description != null && item.description!.isNotEmpty)
-            Text(
+        Text(
+          item.name,
+          style: GoogleFonts.poppins(
+            color: appTheme.textColor,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          softWrap: true,
+        ),
+        if (item.description != null && item.description!.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
               item.description!,
               style: GoogleFonts.poppins(
                 color: appTheme.textColorSecondary,
                 fontSize: 13,
               ),
-              maxLines: showMediaSection ? 2 : 3,
+              maxLines: 6,
               overflow: TextOverflow.ellipsis,
               softWrap: true,
             ),
-          const SizedBox(height: 14),
-          if (priceContent != null)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    appTheme.primaryColor.withValues(alpha: 0.45),
-                    const Color(0xFFFF8A65).withValues(alpha: 0.6),
-                  ],
+          ),
+        if (promotionHint != null && promotionHint!.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: _buildPromotionHintChip(appTheme),
+          ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            if (priceContent != null)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: appTheme.primaryColor.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                borderRadius: BorderRadius.circular(14),
+                child: priceContent,
               ),
-              child: priceContent,
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.arrow_forward_ios,
+                size: 14,
+                color: appTheme.primaryColor,
+              ),
             ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildGridLayout(
+    AppTheme appTheme,
+    bool showMediaSection,
+    bool hasImage,
+    BorderRadius borderRadius,
+  ) {
+    final priceContent = _buildPriceContent(appTheme, fontSize: 14);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (showMediaSection) ...[
+          _buildMedia(
+            appTheme,
+            hasImage,
+            borderRadius,
+            width: double.infinity,
+            height: 150,
+            isGrid: true,
+          ),
+          const SizedBox(height: 14),
+        ],
+        if (item.article != null && item.article!.isNotEmpty)
+          Text(
+            'Art.Nr. ${item.article}',
+            style: GoogleFonts.poppins(
+              color: appTheme.primaryColor.withValues(alpha: 0.9),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        Text(
+          item.name,
+          style: GoogleFonts.poppins(
+            color: appTheme.textColor,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+          maxLines: showMediaSection ? 2 : 3,
+          overflow: TextOverflow.ellipsis,
+          softWrap: true,
+        ),
+        const SizedBox(height: 6),
+        if (item.description != null && item.description!.isNotEmpty)
+          Text(
+            item.description!,
+            style: GoogleFonts.poppins(
+              color: appTheme.textColorSecondary,
+              fontSize: 13,
+            ),
+            maxLines: showMediaSection ? 2 : 3,
+            overflow: TextOverflow.ellipsis,
+            softWrap: true,
+          ),
+        if (promotionHint != null && promotionHint!.trim().isNotEmpty) ...[
+          const SizedBox(height: 8),
+          _buildPromotionHintChip(appTheme),
+        ],
+        const SizedBox(height: 14),
+        if (priceContent != null)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  appTheme.primaryColor.withValues(alpha: 0.45),
+                  const Color(0xFFFF8A65).withValues(alpha: 0.6),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: priceContent,
+          ),
+      ],
+    );
+  }
+
+  Widget _buildMedia(
+    AppTheme appTheme,
+    bool hasImage,
+    BorderRadius borderRadius, {
+    required double width,
+    required double height,
+    required bool isGrid,
+  }) {
+    if (hasImage) {
+      final image = ClipRRect(
+        borderRadius: borderRadius,
+        child: Image.network(
+          item.imageUrl!,
+          width: width,
+          height: height,
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.high,
+          loadingBuilder: (context, child, loadingProgress) {
+            if (loadingProgress == null) return child;
+            return Container(
+              width: width,
+              height: height,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: borderRadius,
+                color: appTheme.backgroundColor.withValues(alpha: 0.2),
+              ),
+              child: SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(appTheme.primaryColor),
+                ),
+              ),
+            );
+          },
+          errorBuilder: (_, __, ___) => _buildFallbackMedia(
+            appTheme,
+            borderRadius,
+            width: width,
+            height: height,
+            isGrid: isGrid,
+          ),
+        ),
+      );
+
+      return SizedBox(
+        width: width,
+        height: height,
+        child: Hero(
+          tag: 'menuItemImage_${item.id}',
+          child: image,
+        ),
+      );
+    }
+
+    return _buildFallbackMedia(
+      appTheme,
+      borderRadius,
+      width: width,
+      height: height,
+      isGrid: isGrid,
+    );
+  }
+
+  Widget _buildFallbackMedia(
+    AppTheme appTheme,
+    BorderRadius borderRadius, {
+    required double width,
+    required double height,
+    required bool isGrid,
+  }) {
+    final gradientColors = isGrid
+        ? const [Color(0xFF2D325A), Color(0xFF1C213A)]
+        : const [Color(0xFF2B314C), Color(0xFF1A1F33)];
+
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        borderRadius: borderRadius,
+        gradient: LinearGradient(
+          colors: gradientColors,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            top: -8,
+            right: -12,
+            child: Icon(
+              Icons.blur_on,
+              color: Colors.white.withValues(alpha: 0.06),
+              size: isGrid ? 118 : 96,
+            ),
+          ),
+          Align(
+            alignment: Alignment.center,
+            child: Icon(
+              Icons.local_pizza,
+              color: Colors.white.withValues(alpha: 0.88),
+              size: isGrid ? 44 : 38,
+            ),
+          ),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 16,
+            child: Text(
+              item.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.poppins(
+                color: Colors.white.withValues(alpha: 0.94),
+                fontSize: isGrid ? 16 : 15,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  PromotionPrice? get _resolvedPriceInfo {
+    if (priceInfo != null) return priceInfo;
+    double? fallback;
+    if (item.hasMultipleSizes) {
+      fallback = item.minPrice > 0 ? item.minPrice : null;
+    } else {
+      fallback =
+          item.singleSizePrice ?? (item.minPrice > 0 ? item.minPrice : null);
+    }
+    if (fallback == null) return null;
+    return PromotionPrice(
+      basePrice: fallback,
+      finalPrice: fallback,
+      discountAmount: 0,
+      promotion: null,
+      target: null,
+    );
+  }
+
+  Widget? _buildPriceContent(AppTheme appTheme, {double fontSize = 13}) {
+    final info = _resolvedPriceInfo;
+    if (info == null) return null;
+    final formatter = (double value) => '${value.toStringAsFixed(2)} €';
+    final finalStyle = GoogleFonts.poppins(
+      color: Colors.white,
+      fontWeight: FontWeight.w600,
+      fontSize: fontSize,
+    );
+    final baseStyle = finalStyle.copyWith(
+      decoration: TextDecoration.lineThrough,
+      color: Colors.white.withValues(alpha: 0.7),
+    );
+
+    Widget content = PriceWithPromotion(
+      basePrice: info.basePrice,
+      finalPrice: info.finalPrice,
+      finalStyle: finalStyle,
+      baseStyle: baseStyle,
+      formatter: formatter,
+    );
+
+    if (item.hasMultipleSizes && info.basePrice > 0) {
+      content = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('ab ', style: finalStyle),
+          content,
         ],
       );
     }
-
-    Widget _buildMedia(
-      AppTheme appTheme,
-      bool hasImage,
-      BorderRadius borderRadius, {
-      required double width,
-      required double height,
-      required bool isGrid,
-    }) {
-      if (hasImage) {
-        final image = ClipRRect(
-          borderRadius: borderRadius,
-          child: Image.network(
-            item.imageUrl!,
-            width: width,
-            height: height,
-            fit: BoxFit.cover,
-            filterQuality: FilterQuality.high,
-            loadingBuilder: (context, child, loadingProgress) {
-              if (loadingProgress == null) return child;
-              return Container(
-                width: width,
-                height: height,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  borderRadius: borderRadius,
-                  color: appTheme.backgroundColor.withValues(alpha: 0.2),
-                ),
-                child: SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor:
-                        AlwaysStoppedAnimation<Color>(appTheme.primaryColor),
-                  ),
-                ),
-              );
-            },
-            errorBuilder: (_, __, ___) => _buildFallbackMedia(
-              appTheme,
-              borderRadius,
-              width: width,
-              height: height,
-              isGrid: isGrid,
-            ),
-          ),
-        );
-
-        return SizedBox(
-          width: width,
-          height: height,
-          child: Hero(
-            tag: 'menuItemImage_${item.id}',
-            child: image,
-          ),
-        );
-      }
-
-      return _buildFallbackMedia(
-        appTheme,
-        borderRadius,
-        width: width,
-        height: height,
-        isGrid: isGrid,
-      );
-    }
-
-    Widget _buildFallbackMedia(
-      AppTheme appTheme,
-      BorderRadius borderRadius, {
-      required double width,
-      required double height,
-      required bool isGrid,
-    }) {
-      final gradientColors = isGrid
-          ? const [Color(0xFF2D325A), Color(0xFF1C213A)]
-          : const [Color(0xFF2B314C), Color(0xFF1A1F33)];
-
-      return Container(
-        width: width,
-        height: height,
-        decoration: BoxDecoration(
-          borderRadius: borderRadius,
-          gradient: LinearGradient(
-            colors: gradientColors,
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-        ),
-        child: Stack(
-          children: [
-            Positioned(
-              top: -8,
-              right: -12,
-              child: Icon(
-                Icons.blur_on,
-                color: Colors.white.withValues(alpha: 0.06),
-                size: isGrid ? 118 : 96,
-              ),
-            ),
-            Align(
-              alignment: Alignment.center,
-              child: Icon(
-                Icons.local_pizza,
-                color: Colors.white.withValues(alpha: 0.88),
-                size: isGrid ? 44 : 38,
-              ),
-            ),
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 16,
-              child: Text(
-                item.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.poppins(
-                  color: Colors.white.withValues(alpha: 0.94),
-                  fontSize: isGrid ? 16 : 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    PromotionPrice? get _resolvedPriceInfo {
-      if (priceInfo != null) return priceInfo;
-      double? fallback;
-      if (item.hasMultipleSizes) {
-        fallback = item.minPrice > 0 ? item.minPrice : null;
-      } else {
-        fallback = item.singleSizePrice ?? (item.minPrice > 0 ? item.minPrice : null);
-      }
-      if (fallback == null) return null;
-      return PromotionPrice(
-        basePrice: fallback,
-        finalPrice: fallback,
-        discountAmount: 0,
-        promotion: null,
-        target: null,
-      );
-    }
-
-    Widget? _buildPriceContent(AppTheme appTheme, {double fontSize = 13}) {
-      final info = _resolvedPriceInfo;
-      if (info == null) return null;
-      final formatter = (double value) => '${value.toStringAsFixed(2)} €';
-      final finalStyle = GoogleFonts.poppins(
-        color: Colors.white,
-        fontWeight: FontWeight.w600,
-        fontSize: fontSize,
-      );
-      final baseStyle = finalStyle.copyWith(
-        decoration: TextDecoration.lineThrough,
-        color: Colors.white.withValues(alpha: 0.7),
-      );
-
-      Widget content = PriceWithPromotion(
-        basePrice: info.basePrice,
-        finalPrice: info.finalPrice,
-        finalStyle: finalStyle,
-        baseStyle: baseStyle,
-        formatter: formatter,
-      );
-
-      if (item.hasMultipleSizes && info.basePrice > 0) {
-        content = Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('ab ', style: finalStyle),
-            content,
-          ],
-        );
-      }
-      return content;
-    }
+    return content;
   }
+
+  Widget _buildPromotionHintChip(AppTheme appTheme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.green.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.green.withValues(alpha: 0.45)),
+      ),
+      child: Text(
+        promotionHint!,
+        style: GoogleFonts.poppins(
+          color: Colors.green.shade100,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
 
 
 

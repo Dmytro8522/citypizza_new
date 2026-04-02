@@ -17,6 +17,7 @@ import '../screens/checkout_screen.dart';
 import '../screens/order_history_screen.dart';
 import '../screens/email_login_screen.dart';
 import '../screens/email_signup_screen.dart';
+import '../theme/theme_provider.dart';
 
 class MainScaffold extends StatefulWidget {
   const MainScaffold({super.key});
@@ -55,8 +56,9 @@ class _MainScaffoldState extends State<MainScaffold> {
 
   @override
   Widget build(BuildContext context) {
+    final appTheme = ThemeProvider.of(context);
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: appTheme.backgroundColor,
       body: Navigator(
         key: navigatorKey,
         initialRoute: 'tab_$_tabIndex',
@@ -124,6 +126,9 @@ class _MainScaffoldState extends State<MainScaffold> {
       ),
       bottomNavigationBar: BottomNav(
         currentIndex: _tabIndex,
+        backgroundColor: appTheme.backgroundColor,
+        selectedColor: appTheme.primaryColor,
+        unselectedColor: appTheme.textColorSecondary,
         onTap: (index) {
           setState(() {
             _tabIndex = index;

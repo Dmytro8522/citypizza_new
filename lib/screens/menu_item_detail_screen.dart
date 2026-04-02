@@ -17,6 +17,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/delivery_zone_service.dart';
 import '../services/discount_service.dart';
 import '../utils/globals.dart';
+import '../services/restaurant_context.dart';
+import '../services/menu_visibility_service.dart';
 
 class ExtraOption {
   final int id;
@@ -80,11 +82,13 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
   // counter: groupId -> {optionId: qty}
   final Map<int, Map<int, int>> _selectedCounters = {};
   int? _categoryId;
+  List<Promotion> _activePromotions = const <Promotion>[];
 
   late final ScrollController _scrollController;
   final GlobalKey _cartIconKey = GlobalKey();
 
   String? _error;
+  bool _itemUnavailable = false;
   bool get _isAnyLoading =>
       _loadingSizes || _loadingExtras || _loadingOptions || _loadingAdditives;
 
@@ -92,6 +96,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
   final Map<int, bool> _groupExpanded = {}; // groupId -> expanded
   bool _extrasExpanded = false;
   bool _sizesExpanded = true; // для многомерных по умолчанию раскрыто
+  bool _allergensExpanded = false;
 
   // Mindestbestellwert Hinweis (Lieferung)
   double? _minOrderAmount;
@@ -168,6 +173,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
         final rows = await supabase
             .from('menu_v2_extra_price_by_size')
             .select('size_id, extra_id, price')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('extra_id', 'in', extraIds.toList())
             .filter('size_id', 'in', sizeIds);
         for (final r in (rows as List).cast<Map<String, dynamic>>()) {
@@ -182,6 +188,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
         final catRows = await supabase
             .from('menu_v2_item')
             .select('id, category_id')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', itemIds);
         for (final r in (catRows as List).cast<Map<String, dynamic>>()) {
           final mid = (r['id'] as int?) ?? 0;
@@ -206,12 +213,30 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
         for (final e in first.extras.entries) {
           unit += (extraPriceMap['${first.sizeId}|${e.key}'] ?? 0.0) * e.value;
         }
+        final extraLineItems = first.extras.entries
+            .where((e) => e.value > 0)
+            .map((e) => {
+                  'id': e.key,
+                  'quantity': e.value,
+                  'unit_price':
+                      extraPriceMap['${first.sizeId}|${e.key}'] ?? 0.0,
+                })
+            .toList();
         final count = entry.value.length;
         rawSum += unit * count;
         cartList.add({
           'id': first.itemId,
           'category_id': itemIdToCategory[first.itemId],
           'size_id': first.sizeId,
+          'extra_ids': first.extras.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toList(),
+          'modifier_option_ids': first.options.entries
+              .where((e) => e.value > 0)
+              .map((e) => e.key)
+              .toList(),
+          'extra_line_items': extraLineItems,
           'price': unit,
           'quantity': count,
         });
@@ -234,6 +259,25 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
 
   Future<void> _initAll() async {
     try {
+      final available =
+          await MenuVisibilityService.isMenuItemVisible(widget.item.id);
+      if (!available) {
+        if (!mounted) return;
+        setState(() {
+          _itemUnavailable = true;
+          _loadingSizes = false;
+          _loadingExtras = false;
+          _loadingOptions = false;
+          _loadingAdditives = false;
+        });
+        await MenuVisibilityService.logMenuItemUnavailable(
+          itemId: widget.item.id,
+          reason: 'hidden',
+          source: 'menu_item_detail',
+        );
+        return;
+      }
+
       // Загружаем параллельно всё, что не зависит от выбранного размера
       // (опции, аллергены). Размеры+допы зависят от size и грузятся вместе.
       final fSizesExtras = _initSizesAndExtras();
@@ -256,6 +300,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
     final row = await _supabase
         .from('menu_v2_item')
         .select('category_id')
+        .eq('restaurant_id', RestaurantContext.current)
         .eq('id', widget.item.id)
         .maybeSingle();
     _categoryId = row != null ? row['category_id'] as int? : null;
@@ -297,7 +342,8 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
       final baseGroupsRaw = await _supabase
           .from('menu_v2_category_modifier_group')
           .select(
-              'group_id, sort_order, menu_v2_modifier_group(id, name, min_select, max_select)')
+              'group_id, sort_order, menu_v2_modifier_group(id, name, min_select, max_select, is_active)')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('category_id', catId);
       final baseGroups = (baseGroupsRaw as List).cast<Map<String, dynamic>>();
 
@@ -305,6 +351,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
       final overridesRaw = await _supabase
           .from('menu_v2_item_modifier_group_override')
           .select('group_id, enabled, sort_order')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('item_id', widget.item.id);
       final overrides = (overridesRaw as List).cast<Map<String, dynamic>>();
       final overrideByGroup = {
@@ -318,6 +365,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
       for (final b in baseGroups) {
         final gobj = b['menu_v2_modifier_group'] as Map<String, dynamic>?;
         if (gobj == null) continue;
+        if (!MenuVisibilityService.isVisibleEntity(gobj)) continue;
         final gid = (gobj['id'] as int?) ?? 0;
         baseMetaById[gid] = {
           'name': (gobj['name'] as String?) ?? '',
@@ -335,9 +383,11 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
         final inList = '(${missingIds.join(',')})';
         final missRows = await _supabase
             .from('menu_v2_modifier_group')
-            .select('id, name, min_select, max_select, sort_order')
+            .select('id, name, min_select, max_select, sort_order, is_active')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', inList);
         for (final r in (missRows as List).cast<Map<String, dynamic>>()) {
+          if (!MenuVisibilityService.isVisibleEntity(r)) continue;
           final gid = (r['id'] as int?) ?? 0;
           baseMetaById[gid] = {
             'name': (r['name'] as String?) ?? '',
@@ -383,10 +433,12 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
         final inList = '(${groupIds.join(',')})';
         final optsRaw = await _supabase
             .from('menu_v2_modifier_option')
-            .select('id, group_id, name, sort_order')
+            .select('id, group_id, name, sort_order, is_active')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('group_id', 'in', inList);
         final arr = (optsRaw as List).cast<Map<String, dynamic>>();
         for (final o in arr) {
+          if (!MenuVisibilityService.isVisibleEntity(o)) continue;
           final gid = (o['group_id'] as int?) ?? 0;
           optsByGroup.putIfAbsent(gid, () => []).add(o);
         }
@@ -466,10 +518,12 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
     try {
       final catId = await _ensureCategoryId();
       final promotions = await getCachedPromotions(now: DateTime.now());
+      _activePromotions = promotions;
       // Универсально: читаем view menu_v2_item_prices
       final priceRows = await _supabase
           .from('menu_v2_item_prices')
           .select('item_id, size_id, price, is_single_size')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('item_id', widget.item.id)
           .order('is_single_size', ascending: false)
           .order('size_id', ascending: true);
@@ -508,6 +562,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
             final szRows = await _supabase
                 .from('menu_size')
                 .select('id, name')
+                .eq('restaurant_id', RestaurantContext.current)
                 .filter('id', 'in', '(${sizeIds.join(',')})');
             for (final r in (szRows as List)) {
               final id = (r['id'] as int?) ?? 0;
@@ -574,6 +629,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
     final itemAllowedRaw = await _supabase
         .from('menu_v2_item_allowed_extras')
         .select('extra_id')
+        .eq('restaurant_id', RestaurantContext.current)
         .eq('item_id', widget.item.id);
     final itemAllowed = (itemAllowedRaw as List)
         .map((e) => ((e['extra_id'] as int?) ?? 0))
@@ -586,6 +642,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
       final catAllowedRaw = await _supabase
           .from('menu_v2_category_allowed_extras')
           .select('extra_id')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('category_id', catId);
       allowedIds = (catAllowedRaw as List)
           .map((e) => ((e['extra_id'] as int?) ?? 0))
@@ -613,6 +670,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
         final szRow = await _supabase
             .from('menu_size')
             .select('id')
+            .eq('restaurant_id', RestaurantContext.current)
             .eq('name', sname)
             .maybeSingle();
         sizeId = szRow != null ? (szRow['id'] as int?) ?? 0 : null;
@@ -624,6 +682,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
         final rows = await _supabase
             .from('menu_v2_extra_price_by_size')
             .select('extra_id, price')
+            .eq('restaurant_id', RestaurantContext.current)
             .eq('size_id', sizeId);
         for (final r in (rows as List).cast<Map<String, dynamic>>()) {
           final eid = (r['extra_id'] as int?) ?? 0;
@@ -637,11 +696,13 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
     // Подтягиваем названия и single_price для всех разрешённых ID
     final extraRows = await _supabase
         .from('menu_v2_extra')
-        .select('id, name, single_price')
+        .select('id, name, single_price, is_active')
+        .eq('restaurant_id', RestaurantContext.current)
         .filter('id', 'in', '(${allowedIds.join(",")})');
     final nameMap = <int, String>{};
     final singlePriceMap = <int, double>{};
     for (final x in (extraRows as List).cast<Map<String, dynamic>>()) {
+      if (!MenuVisibilityService.isVisibleEntity(x)) continue;
       final eid = (x['id'] as int?) ?? 0;
       if (eid == 0) continue;
       nameMap[eid] = (x['name'] as String?) ?? '';
@@ -650,20 +711,26 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
     }
 
     // Создаём список ExtraOption: даже если цены нет, ставим fallback single_price или 0.0
-    _extras = allowedIds.map((eid) {
-      double price = priceByExtra[eid] ?? 0.0;
-      if (!_itemHasSizes ||
-          (priceByExtra[eid] == null && singlePriceMap.containsKey(eid))) {
-        price = singlePriceMap[eid] ?? price;
-      }
-      final opt = ExtraOption(
-        id: eid,
-        name: nameMap[eid] ?? 'Extra #$eid',
-        price: price,
-      );
-      opt.key = UniqueKey();
-      return opt;
-    }).toList()
+    _extras = allowedIds
+        .map((eid) {
+          if (!nameMap.containsKey(eid)) {
+            return null;
+          }
+          double price = priceByExtra[eid] ?? 0.0;
+          if (!_itemHasSizes ||
+              (priceByExtra[eid] == null && singlePriceMap.containsKey(eid))) {
+            price = singlePriceMap[eid] ?? price;
+          }
+          final opt = ExtraOption(
+            id: eid,
+            name: nameMap[eid] ?? 'Extra #$eid',
+            price: price,
+          );
+          opt.key = UniqueKey();
+          return opt;
+        })
+        .whereType<ExtraOption>()
+        .toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
     setState(() => _loadingExtras = false);
@@ -675,6 +742,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
     final rows = await _supabase
         .from('menu_v2_item_allergen')
         .select('allergen_id')
+        .eq('restaurant_id', RestaurantContext.current)
         .eq('item_id', widget.item.id);
     final ids = (rows as List)
         .map((r) => ((r['allergen_id'] as int?) ?? 0))
@@ -690,6 +758,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
     final adds = await _supabase
         .from('menu_v2_allergen')
         .select('title')
+        .eq('restaurant_id', RestaurantContext.current)
         .filter('id', 'in', '(${ids.join(",")})');
     _additiveLabels = (adds as List)
         .map((a) => (a['title'] as String?) ?? '')
@@ -714,6 +783,20 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
   void _close() => Navigator.pop(context);
 
   Future<void> _addToCart() async {
+    final visible =
+        await MenuVisibilityService.isMenuItemVisible(widget.item.id);
+    if (!visible) {
+      if (!mounted) return;
+      setState(() => _itemUnavailable = true);
+      await MenuVisibilityService.logMenuItemUnavailable(
+        itemId: widget.item.id,
+        reason: 'hidden',
+        source: 'menu_item_add_to_cart',
+      );
+      _showWarn('Dieser Artikel ist nicht mehr verfügbar.');
+      return;
+    }
+
     // Валидация групп опций по правилам
     for (final g in _optionGroups) {
       final type = _resolveType(g);
@@ -973,11 +1056,171 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
     return _computeTotalWithBase(basePrice);
   }
 
-  double _computeDiscountedTotal(PromotionPrice? priceInfo) {
-    final basePrice = priceInfo?.finalPrice ??
-        _selectedSize?.price ??
-        (widget.item.singleSizePrice ?? 0.0);
-    return _computeTotalWithBase(basePrice);
+  Set<int> _selectedExtraIds() {
+    return _extras.where((e) => e.quantity > 0).map((e) => e.id).toSet();
+  }
+
+  Set<int> _selectedModifierOptionIds() {
+    final ids = <int>{};
+    for (final g in _optionGroups) {
+      final type = _resolveType(g);
+      if (type == _OptionType.radio) {
+        final id = _selectedRadio[g.id];
+        if (id != null) ids.add(id);
+      } else if (type == _OptionType.checkbox) {
+        ids.addAll(_selectedChecks[g.id] ?? const <int>{});
+      } else {
+        for (final e
+            in (_selectedCounters[g.id] ?? const <int, int>{}).entries) {
+          if (e.value > 0) ids.add(e.key);
+        }
+      }
+    }
+    return ids;
+  }
+
+  PromotionPrice? _currentSelectionPromotionPrice() {
+    if (_selectedSize == null) return null;
+    final unitPrice = _computeCurrentTotal();
+    if (unitPrice <= 0) return null;
+    final evaluated = evaluatePromotionForUnitPrice(
+      promotions: _activePromotions,
+      unitPrice: unitPrice,
+      itemId: widget.item.id,
+      categoryId: _categoryId,
+      sizeId: _selectedSize?.id,
+      selectedExtraIds: _selectedExtraIds(),
+      selectedModifierOptionIds: _selectedModifierOptionIds(),
+      selectedExtraLineItems: _extras
+          .where((e) => e.quantity > 0)
+          .map((e) => {
+                'id': e.id,
+                'quantity': e.quantity,
+                'unit_price': e.price,
+              })
+          .toList(),
+    );
+    return evaluated;
+  }
+
+  String _extraLabelById(int id) {
+    for (final e in _extras) {
+      if (e.id == id) return e.name;
+    }
+    return 'Extra #$id';
+  }
+
+  String _modifierLabelById(int id) {
+    for (final group in _optionGroups) {
+      for (final item in group.items) {
+        if (item.id == id) {
+          if (item.text.trim().isNotEmpty) return item.text;
+          if ((item.linkedItemName ?? '').trim().isNotEmpty) {
+            return item.linkedItemName!.trim();
+          }
+        }
+      }
+    }
+    return 'Option #$id';
+  }
+
+  String? _promotionScopeHint(PromotionPrice? info) {
+    final target = info?.target;
+    final freeLimit = info?.promotion?.freeExtrasLimit;
+    if (target == null) return null;
+    switch (target.targetType) {
+      case 'item_size_extra':
+      case 'category_size_extra':
+        final eid = target.extraId;
+        if (eid != null) {
+          if (freeLimit != null && freeLimit > 0) {
+            return 'Rabatt gilt mit Extra: ${_extraLabelById(eid)} (max. $freeLimit gratis)';
+          }
+          return 'Rabatt gilt mit Extra: ${_extraLabelById(eid)}';
+        }
+        if (freeLimit != null && freeLimit > 0) {
+          return 'Rabatt gilt für ausgewählte Extras (max. $freeLimit gratis)';
+        }
+        return 'Rabatt gilt für ausgewählte Extras';
+      case 'item_size_modifier':
+      case 'category_size_modifier':
+        final oid = target.modifierOptionId;
+        if (oid != null) {
+          return 'Rabatt gilt mit Option: ${_modifierLabelById(oid)}';
+        }
+        return 'Rabatt gilt für ausgewählte Optionen';
+      case 'item_size':
+      case 'category_size':
+        return 'Rabatt gilt für die gewählte Größe';
+      case 'item':
+      case 'category':
+        return 'Rabatt gilt für diesen Artikel';
+      default:
+        return null;
+    }
+  }
+
+  List<String> _availableScopedPromotionHints() {
+    final sizeId = _selectedSize?.id;
+    if (sizeId == null || sizeId == 0) return const <String>[];
+
+    final hints = <String>{};
+    for (final promo in _activePromotions) {
+      for (final t in promo.targets) {
+        if (t.sizeId != sizeId) continue;
+        if (t.targetType == 'item_size_extra' && t.itemId == widget.item.id) {
+          if (t.extraId != null) {
+            final cap =
+                (promo.freeExtrasLimit != null && promo.freeExtrasLimit! > 0)
+                    ? ' (max. ${promo.freeExtrasLimit} gratis)'
+                    : '';
+            hints.add(
+                'Rabatt möglich mit Extra: ${_extraLabelById(t.extraId!)}$cap');
+          } else {
+            final cap =
+                (promo.freeExtrasLimit != null && promo.freeExtrasLimit! > 0)
+                    ? ' (max. ${promo.freeExtrasLimit} gratis)'
+                    : '';
+            hints.add('Rabatt möglich mit bestimmten Extras$cap');
+          }
+        } else if (t.targetType == 'item_size_modifier' &&
+            t.itemId == widget.item.id) {
+          if (t.modifierOptionId != null) {
+            hints.add(
+                'Rabatt möglich mit Option: ${_modifierLabelById(t.modifierOptionId!)}');
+          } else {
+            hints.add('Rabatt möglich mit bestimmten Optionen');
+          }
+        } else if (t.targetType == 'category_size_extra' &&
+            _categoryId != null &&
+            t.categoryId == _categoryId) {
+          if (t.extraId != null) {
+            final cap =
+                (promo.freeExtrasLimit != null && promo.freeExtrasLimit! > 0)
+                    ? ' (max. ${promo.freeExtrasLimit} gratis)'
+                    : '';
+            hints.add(
+                'Rabatt möglich mit Extra: ${_extraLabelById(t.extraId!)}$cap');
+          } else {
+            final cap =
+                (promo.freeExtrasLimit != null && promo.freeExtrasLimit! > 0)
+                    ? ' (max. ${promo.freeExtrasLimit} gratis)'
+                    : '';
+            hints.add('Rabatt möglich mit bestimmten Extras$cap');
+          }
+        } else if (t.targetType == 'category_size_modifier' &&
+            _categoryId != null &&
+            t.categoryId == _categoryId) {
+          if (t.modifierOptionId != null) {
+            hints.add(
+                'Rabatt möglich mit Option: ${_modifierLabelById(t.modifierOptionId!)}');
+          } else {
+            hints.add('Rabatt möglich mit bestimmten Optionen');
+          }
+        }
+      }
+    }
+    return hints.toList()..sort();
   }
 
   // Пояснение, почему кнопка "В корзину" отключена.
@@ -1022,10 +1265,13 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
   @override
   Widget build(BuildContext context) {
     final appTheme = ThemeProvider.of(context);
-    final currentPrice =
+    final sizePriceInfo =
         _selectedSize != null ? _priceFor(_selectedSize!) : null;
+    final currentPrice = _currentSelectionPromotionPrice();
     final baseTotal = _computeCurrentTotal();
-    final discountedTotal = _computeDiscountedTotal(currentPrice);
+    final discountedTotal = currentPrice?.finalPrice ?? baseTotal;
+    final promotionScopeHint = _promotionScopeHint(currentPrice);
+    final availableScopedHints = _availableScopedPromotionHints();
     if (_error != null) {
       return Scaffold(
         backgroundColor: appTheme.backgroundColor,
@@ -1043,6 +1289,47 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
         body: NoInternetWidget(
           onRetry: _initAll,
           errorText: _error,
+        ),
+      );
+    }
+    if (_itemUnavailable) {
+      return Scaffold(
+        backgroundColor: appTheme.backgroundColor,
+        appBar: AppBar(
+          backgroundColor: appTheme.backgroundColor,
+          leading: IconButton(
+            icon: Icon(Icons.arrow_back, color: appTheme.textColor),
+            onPressed: _close,
+          ),
+          title: Text(widget.item.name,
+              style: GoogleFonts.fredokaOne(color: appTheme.primaryColor)),
+          centerTitle: true,
+          elevation: 0,
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Товар недоступен',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    color: appTheme.textColor,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  onPressed: () =>
+                      Navigator.of(context).pushReplacementNamed('tab_1'),
+                  child: const Text('Вернуться в меню'),
+                ),
+              ],
+            ),
+          ),
         ),
       );
     }
@@ -1163,30 +1450,80 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
             ],
             // Аллергены показываем только если есть загруженные метки
             if (!_loadingAdditives && _additiveLabels.isNotEmpty) ...[
-              Text('Allergene:',
-                  style: GoogleFonts.poppins(
-                      color: appTheme.textColor,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: _additiveLabels
-                    .map((label) => Chip(
-                          label: Text(
-                            label,
-                            style: GoogleFonts.poppins(
-                                color: appTheme.textColor, fontSize: 12),
-                          ),
-                          backgroundColor: appTheme.cardColor,
-                          shape: StadiumBorder(
-                            side: BorderSide(
-                                color: appTheme.primaryColor
-                                    .withValues(alpha: 0.2)),
-                          ),
-                        ))
-                    .toList(),
+              Container(
+                margin: const EdgeInsets.only(top: 4, bottom: 4),
+                decoration: BoxDecoration(
+                  color: appTheme.cardColor.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(12),
+                  border:
+                      Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                ),
+                child: Column(
+                  children: [
+                    InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => setState(
+                          () => _allergensExpanded = !_allergensExpanded),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline,
+                                color: appTheme.primaryColor, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Allergene',
+                                style: GoogleFonts.poppins(
+                                  color: appTheme.textColor,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            Icon(
+                              _allergensExpanded
+                                  ? Icons.keyboard_arrow_up
+                                  : Icons.keyboard_arrow_down,
+                              color: appTheme.textColorSecondary,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    AnimatedCrossFade(
+                      duration: const Duration(milliseconds: 180),
+                      crossFadeState: _allergensExpanded
+                          ? CrossFadeState.showFirst
+                          : CrossFadeState.showSecond,
+                      firstChild: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: _additiveLabels
+                              .map((label) => Chip(
+                                    label: Text(
+                                      label,
+                                      style: GoogleFonts.poppins(
+                                          color: appTheme.textColor,
+                                          fontSize: 12),
+                                    ),
+                                    backgroundColor: appTheme.cardColor,
+                                    shape: StadiumBorder(
+                                      side: BorderSide(
+                                          color: appTheme.primaryColor
+                                              .withValues(alpha: 0.2)),
+                                    ),
+                                  ))
+                              .toList(),
+                        ),
+                      ),
+                      secondChild: const SizedBox.shrink(),
+                    ),
+                  ],
+                ),
               ),
             ],
             const SizedBox(height: 12),
@@ -1212,7 +1549,7 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
                       style: GoogleFonts.poppins(
                           color: appTheme.textColor,
                           fontWeight: FontWeight.w600)),
-                  subtitle: (_selectedSize != null && currentPrice != null)
+                  subtitle: (_selectedSize != null && sizePriceInfo != null)
                       ? Row(
                           children: [
                             Expanded(
@@ -1223,8 +1560,8 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
                               ),
                             ),
                             PriceWithPromotion(
-                              basePrice: currentPrice.basePrice,
-                              finalPrice: currentPrice.finalPrice,
+                              basePrice: sizePriceInfo.basePrice,
+                              finalPrice: sizePriceInfo.finalPrice,
                               finalStyle: GoogleFonts.poppins(
                                 color: appTheme.textColorSecondary,
                                 fontWeight: FontWeight.w600,
@@ -1298,10 +1635,10 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
                             style: GoogleFonts.poppins(
                                 color: appTheme.textColor,
                                 fontWeight: FontWeight.w600)),
-                        subtitle: currentPrice != null
+                        subtitle: sizePriceInfo != null
                             ? PriceWithPromotion(
-                                basePrice: currentPrice.basePrice,
-                                finalPrice: currentPrice.finalPrice,
+                                basePrice: sizePriceInfo.basePrice,
+                                finalPrice: sizePriceInfo.finalPrice,
                                 finalStyle: GoogleFonts.poppins(
                                   color: appTheme.textColorSecondary,
                                   fontSize: 14,
@@ -1332,6 +1669,60 @@ class _MenuItemDetailScreenState extends State<MenuItemDetailScreen>
                       expanded: _groupExpanded[g.id] ?? false, onExpanded: (v) {
                     setState(() => _groupExpanded[g.id] = v);
                   })),
+            ],
+            if (promotionScopeHint != null ||
+                ((currentPrice?.hasDiscount ?? false) == false &&
+                    availableScopedHints.isNotEmpty)) ...[
+              const SizedBox(height: 8),
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.green.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border:
+                      Border.all(color: Colors.green.withValues(alpha: 0.35)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (promotionScopeHint != null)
+                      Text(
+                        promotionScopeHint,
+                        style: GoogleFonts.poppins(
+                          color: Colors.green.shade100,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    if (promotionScopeHint == null &&
+                        availableScopedHints.isNotEmpty) ...[
+                      Text(
+                        'Aktive Rabatte verfügbar:',
+                        style: GoogleFonts.poppins(
+                          color: Colors.green.shade100,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      ...availableScopedHints.take(3).map(
+                            (hint) => Padding(
+                              padding: const EdgeInsets.only(bottom: 2),
+                              child: Text(
+                                '• $hint',
+                                style: GoogleFonts.poppins(
+                                  color: appTheme.textColor,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ),
+                    ],
+                  ],
+                ),
+              ),
             ],
             const SizedBox(height: 24),
             // Extras (ниже модификаторов). Цены динамически зависят от выбранного размера

@@ -1,6 +1,8 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'cart_service.dart';
 import 'discount_service.dart';
+import 'restaurant_context.dart';
+import 'menu_visibility_service.dart';
 
 class OrderService {
   static final SupabaseClient _db = Supabase.instance.client;
@@ -31,10 +33,21 @@ class OrderService {
     double? totalDiscount,
     List<Map<String, dynamic>>? appliedDiscounts,
   }) async {
+    final sanitizeResult =
+        await MenuVisibilityService.sanitizeCartHiddenEntities(
+      source: 'order_service',
+    );
+    final currentItems = CartService.items;
+    if (sanitizeResult.hasUnavailable || currentItems.isEmpty) {
+      throw Exception(
+          'Warenkorb enthält nicht verfügbare Artikel. Bitte aktualisieren Sie den Warenkorb.');
+    }
+
     // 1) Insert в orders и возврат ID
     final orderInsert = await _db
         .from('orders')
         .insert({
+          'restaurant_id': RestaurantContext.current,
           'user_id': _db.auth.currentUser?.id,
           'name': name,
           'phone': phone,
@@ -59,7 +72,7 @@ class OrderService {
     final int orderId = (orderInsert['id'] as int?) ?? 0;
 
     // 2) Вставка позиций
-    final items = CartService.items;
+    final items = currentItems;
     final promotions = await getCachedPromotions(now: DateTime.now());
     final itemIds = items.map((e) => e.itemId).toSet().toList();
     final categoryByItem = <int, int?>{};
@@ -71,6 +84,7 @@ class OrderService {
       final catRows = await _db
           .from('menu_v2_item')
           .select('id, category_id, has_sizes')
+          .eq('restaurant_id', RestaurantContext.current)
           .filter('id', 'in', inList);
       for (final row in (catRows as List).cast<Map<String, dynamic>>()) {
         final id = (row['id'] as int?) ?? 0;
@@ -88,6 +102,7 @@ class OrderService {
       final rows = await _db
           .from('menu_v2_extra')
           .select('id, single_price')
+          .eq('restaurant_id', RestaurantContext.current)
           .filter('id', 'in', inList);
       for (final row in (rows as List).cast<Map<String, dynamic>>()) {
         final id = (row['id'] as int?) ?? 0;
@@ -104,6 +119,7 @@ class OrderService {
         final rows = await _db
             .from('menu_v2_modifier_option')
             .select('id, name, group_id')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', inList);
         for (final row in (rows as List).cast<Map<String, dynamic>>()) {
           final id = (row['id'] as int?) ?? 0;
@@ -133,6 +149,7 @@ class OrderService {
             final exactRow = await _db
                 .from('menu_v2_item_size_price')
                 .select('size_id, size_name')
+                .eq('restaurant_id', RestaurantContext.current)
                 .eq('item_id', cartItem.itemId)
                 .eq('size_name', cartItem.size)
                 .maybeSingle();
@@ -144,6 +161,7 @@ class OrderService {
             final rows = (await _db
                 .from('menu_v2_item_size_price')
                 .select('size_id')
+                .eq('restaurant_id', RestaurantContext.current)
                 .eq('item_id', cartItem.itemId)
                 .eq('is_available', true)
                 .order('price', ascending: true)
@@ -165,12 +183,21 @@ class OrderService {
         itemId: cartItem.itemId,
         categoryId: categoryByItem[cartItem.itemId],
         sizeId: sizeId,
+        selectedExtraIds: cartItem.extras.entries
+            .where((e) => e.value > 0)
+            .map((e) => e.key)
+            .toSet(),
+        selectedModifierOptionIds: cartItem.options.entries
+            .where((e) => e.value > 0)
+            .map((e) => e.key)
+            .toSet(),
       );
       final finalUnitPrice = promoInfo.finalPrice;
 
       // Вставляем order_item (каждая CartItem — количество 1)
       // Переход на v2: сначала пробуем поле menu_v2_item_id, если его нет — fallback на menu_item_id
       Map<String, dynamic> itemInsert = {
+        'restaurant_id': RestaurantContext.current,
         'order_id': orderId,
         'quantity': 1,
         'base_price': cartItem.basePrice,
@@ -212,6 +239,7 @@ class OrderService {
           final priceRow = await _db
               .from('menu_v2_extra_price_by_size')
               .select('price')
+              .eq('restaurant_id', RestaurantContext.current)
               .eq('size_id', sizeId)
               .eq('extra_id', extraId)
               .maybeSingle();
@@ -221,6 +249,7 @@ class OrderService {
           extraPrice = extraSinglePrice[extraId] ?? 0.0;
         }
         final baseExtraInsert = <String, dynamic>{
+          'restaurant_id': RestaurantContext.current,
           'order_item_id': orderItemId,
           'quantity': quantity,
           'price': extraPrice,
@@ -267,6 +296,7 @@ class OrderService {
               : 'Option #$optId';
 
           final base = <String, dynamic>{
+            'restaurant_id': RestaurantContext.current,
             'order_item_id': orderItemId,
             'quantity': quantity,
           };
@@ -337,6 +367,7 @@ class OrderService {
 
           if (!inserted) {
             await _tryInsertOptionRow({
+              'restaurant_id': RestaurantContext.current,
               'order_item_id': orderItemId,
               'quantity': quantity,
             });
@@ -358,6 +389,7 @@ class OrderService {
         .from('orders')
         .select(
             '*, order_items(*, order_item_extras(*), order_item_options(*))')
+        .eq('restaurant_id', RestaurantContext.current)
         .eq('user_id', userId)
         .order('created_at', ascending: false);
     return (data as List).cast();
@@ -365,6 +397,7 @@ class OrderService {
 
   static Future<bool> _tryInsertOptionRow(Map<String, dynamic> payload) async {
     try {
+      payload.putIfAbsent('restaurant_id', () => RestaurantContext.current);
       await _db.from('order_item_options').insert(payload);
       return true;
     } catch (_) {
@@ -405,6 +438,7 @@ class OrderService {
         final row = await _db
             .from('menu_v2_modifier_option')
             .select('name')
+            .eq('restaurant_id', RestaurantContext.current)
             .eq('id', optionId)
             .maybeSingle();
         resolvedName = (row?['name'] as String?)?.trim();
@@ -451,6 +485,7 @@ class OrderService {
       final extraRow = await _db
           .from('menu_v2_extra')
           .select('name')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('id', extraId)
           .maybeSingle();
       final extraName = (extraRow?['name'] as String?)?.trim();

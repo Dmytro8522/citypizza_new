@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'restaurant_context.dart';
+
 /// Service for retrieving minimum order amounts per postal code.
 /// Uses in-memory caching with a short TTL to reduce network traffic.
 class DeliveryZoneService {
@@ -23,6 +25,7 @@ class DeliveryZoneService {
       final row = await _client
           .from('delivery_postal_code')
           .select('postal_code, min_order')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('postal_code', key)
           .maybeSingle();
       if (row == null) {

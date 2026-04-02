@@ -8,6 +8,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/cart_service.dart';
 import '../widgets/animated_gradient_section.dart';
 import '../widgets/no_internet_widget.dart';
+import '../services/restaurant_context.dart';
+import '../services/menu_visibility_service.dart';
 
 class RecentOrdersCarousel extends StatefulWidget {
   const RecentOrdersCarousel({super.key});
@@ -40,6 +42,7 @@ class _RecentOrdersCarouselState extends State<RecentOrdersCarousel> {
       final rawOrders = await supabase
           .from('orders')
           .select('id, created_at, total_sum')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('user_id', user.id)
           .order('created_at', ascending: false)
           .limit(5);
@@ -53,6 +56,7 @@ class _RecentOrdersCarouselState extends State<RecentOrdersCarousel> {
           ? await supabase
               .from('order_items')
               .select('*')
+              .eq('restaurant_id', RestaurantContext.current)
               .filter('order_id', 'in', '(${orderIds.join(',')})')
           : <dynamic>[];
       final itemsList = rawItems.cast<Map<String, dynamic>>();
@@ -65,14 +69,19 @@ class _RecentOrdersCarouselState extends State<RecentOrdersCarousel> {
           .toSet()
           .toList();
       final hasSizes = <int, bool>{};
+      final visibleMenuIds = <int>{};
       if (menuIds.isNotEmpty) {
         final rawMenu = await supabase
             .from('menu_v2_item')
-            .select('id, has_sizes')
+            .select('id, has_sizes, is_active')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', '(${menuIds.join(',')})');
         for (final m in (rawMenu as List).cast<Map<String, dynamic>>()) {
           final mid = (m['id'] as int?) ?? 0;
-          if (mid != 0) hasSizes[mid] = (m['has_sizes'] as bool?) ?? false;
+          if (mid == 0) continue;
+          if (!MenuVisibilityService.isVisibleEntity(m)) continue;
+          visibleMenuIds.add(mid);
+          hasSizes[mid] = (m['has_sizes'] as bool?) ?? false;
         }
       }
 
@@ -87,6 +96,7 @@ class _RecentOrdersCarouselState extends State<RecentOrdersCarousel> {
         final rawSizes = await supabase
             .from('menu_size')
             .select('id, name')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('id', 'in', '(${sizeIds.join(',')})');
         for (final s in (rawSizes as List).cast<Map<String, dynamic>>()) {
           final sid = (s['id'] as int?) ?? 0;
@@ -104,6 +114,7 @@ class _RecentOrdersCarouselState extends State<RecentOrdersCarousel> {
         final rawExtras = await supabase
             .from('order_item_extras')
             .select('*')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('order_item_id', 'in', '(${itemIds.join(',')})');
         final extraIds = (rawExtras as List)
             .map((e) => ((e['menu_v2_extra_id'] as int?) ??
@@ -118,6 +129,7 @@ class _RecentOrdersCarouselState extends State<RecentOrdersCarousel> {
           final rawExtraNames = await supabase
               .from('menu_v2_extra')
               .select('id, name')
+              .eq('restaurant_id', RestaurantContext.current)
               .filter('id', 'in', '(${extraIds.join(',')})');
           for (final e
               in (rawExtraNames as List).cast<Map<String, dynamic>>()) {
@@ -144,6 +156,7 @@ class _RecentOrdersCarouselState extends State<RecentOrdersCarousel> {
         final rawOpts = await supabase
             .from('order_item_options')
             .select('*')
+            .eq('restaurant_id', RestaurantContext.current)
             .filter('order_item_id', 'in', '(${itemIds.join(',')})');
         final optionIds = (rawOpts as List)
             .map((o) => ((o['modifier_option_id'] as int?) ??
@@ -158,6 +171,7 @@ class _RecentOrdersCarouselState extends State<RecentOrdersCarousel> {
           final rawOptionNames = await supabase
               .from('menu_v2_modifier_option')
               .select('id, name')
+              .eq('restaurant_id', RestaurantContext.current)
               .filter('id', 'in', '(${optionIds.join(',')})');
           for (final r
               in (rawOptionNames as List).cast<Map<String, dynamic>>()) {
@@ -198,37 +212,50 @@ class _RecentOrdersCarouselState extends State<RecentOrdersCarousel> {
         grouped.putIfAbsent(oid, () => []).add(it);
       }
 
-      final result = ordersList.map((o) {
-        final rawIts =
-            grouped[(o['id'] as int?) ?? 0] ?? <Map<String, dynamic>>[];
-        final enriched = rawIts.map((it) {
-          final sid = it['size_id'] as int?;
-          final resolvedMid = (it['menu_v2_item_id'] as int?) ??
-              (it['menu_item_id'] as int?) ??
-              0;
-          final showSize = (sid != null) && (hasSizes[resolvedMid] == true);
-          return {
-            ...it,
-            'size_name': showSize && sizeNames.containsKey(sid)
-                ? (sizeNames[sid] ?? '')
-                : '',
-            'size_label': showSize && sizeNames.containsKey(sid)
-                ? ' (${sizeNames[sid]})'
-                : '',
-            'extras':
-                extrasBy[(it['id'] as int?) ?? 0] ?? <Map<String, dynamic>>[],
-            'options':
-                optionsBy[(it['id'] as int?) ?? 0] ?? <Map<String, dynamic>>[],
-            'resolved_menu_item_id': resolvedMid,
-          };
-        }).toList();
-        return {
-          'id': o['id'],
-          'created_at': o['created_at'],
-          'total_sum': o['total_sum'],
-          'items': enriched,
-        };
-      }).toList();
+      final result = ordersList
+          .map((o) {
+            final rawIts =
+                grouped[(o['id'] as int?) ?? 0] ?? <Map<String, dynamic>>[];
+            final enriched = rawIts
+                .map((it) {
+                  final sid = it['size_id'] as int?;
+                  final resolvedMid = (it['menu_v2_item_id'] as int?) ??
+                      (it['menu_item_id'] as int?) ??
+                      0;
+                  if (!visibleMenuIds.contains(resolvedMid)) {
+                    return null;
+                  }
+                  final showSize =
+                      (sid != null) && (hasSizes[resolvedMid] == true);
+                  return {
+                    ...it,
+                    'size_name': showSize && sizeNames.containsKey(sid)
+                        ? (sizeNames[sid] ?? '')
+                        : '',
+                    'size_label': showSize && sizeNames.containsKey(sid)
+                        ? ' (${sizeNames[sid]})'
+                        : '',
+                    'extras': extrasBy[(it['id'] as int?) ?? 0] ??
+                        <Map<String, dynamic>>[],
+                    'options': optionsBy[(it['id'] as int?) ?? 0] ??
+                        <Map<String, dynamic>>[],
+                    'resolved_menu_item_id': resolvedMid,
+                  };
+                })
+                .whereType<Map<String, dynamic>>()
+                .toList();
+            if (enriched.isEmpty) {
+              return null;
+            }
+            return {
+              'id': o['id'],
+              'created_at': o['created_at'],
+              'total_sum': o['total_sum'],
+              'items': enriched,
+            };
+          })
+          .whereType<Map<String, dynamic>>()
+          .toList();
 
       if (!mounted) return;
       setState(() {
@@ -616,7 +643,8 @@ class _RecentOrdersCarouselState extends State<RecentOrdersCarousel> {
 
 /// Обёртка-секция с градиентом
 class RecentOrdersSection extends StatefulWidget {
-  const RecentOrdersSection({super.key});
+  final ValueChanged<bool>? onAvailabilityChanged;
+  const RecentOrdersSection({super.key, this.onAvailabilityChanged});
 
   @override
   State<RecentOrdersSection> createState() => _RecentOrdersSectionState();
@@ -641,12 +669,14 @@ class _RecentOrdersSectionState extends State<RecentOrdersSection> {
         _checked = true;
         _hasOrders = false;
       });
+      widget.onAvailabilityChanged?.call(false);
       return;
     }
     try {
       final rows = await _supabase
           .from('orders')
           .select('id')
+          .eq('restaurant_id', RestaurantContext.current)
           .eq('user_id', user.id)
           .order('created_at', ascending: false)
           .limit(1);
@@ -656,12 +686,14 @@ class _RecentOrdersSectionState extends State<RecentOrdersSection> {
         _hasOrders = list.isNotEmpty;
         _checked = true;
       });
+      widget.onAvailabilityChanged?.call(list.isNotEmpty);
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _hasOrders = false;
         _checked = true;
       });
+      widget.onAvailabilityChanged?.call(false);
     }
   }
 

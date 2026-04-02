@@ -6,6 +6,7 @@ import '../services/order_service.dart';
 import '../utils/globals.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../widgets/no_internet_widget.dart';
+import '../services/restaurant_context.dart';
 
 class OrderHistoryScreen extends StatefulWidget {
   const OrderHistoryScreen({super.key});
@@ -35,6 +36,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     final row = await Supabase.instance.client
         .from('menu_v2_item')
         .select('name, has_sizes')
+      .eq('restaurant_id', RestaurantContext.current)
         .eq('id', id)
         .maybeSingle();
     final name = row?['name'] as String? ?? '№$id';
@@ -50,6 +52,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     final row = await Supabase.instance.client
         .from('menu_size')
         .select('name')
+      .eq('restaurant_id', RestaurantContext.current)
         .eq('id', id)
         .maybeSingle();
     final name = row?['name'] as String? ?? '';
@@ -62,6 +65,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     final row = await Supabase.instance.client
         .from('menu_v2_extra')
         .select('name')
+      .eq('restaurant_id', RestaurantContext.current)
         .eq('id', id)
         .maybeSingle();
     final name = row?['name'] as String? ?? '№$id';
@@ -75,6 +79,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     final row = await Supabase.instance.client
         .from('menu_v2_modifier_option')
         .select('name')
+      .eq('restaurant_id', RestaurantContext.current)
         .eq('id', id)
         .maybeSingle();
     String name = '';

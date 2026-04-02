@@ -1,6 +1,7 @@
 // lib/widgets/bottom_nav.dart
 
 import 'package:flutter/material.dart';
+import '../utils/app_text.dart';
 
 typedef OnTab = void Function(int index);
 
@@ -31,18 +32,18 @@ class BottomNav extends StatelessWidget {
       currentIndex: currentIndex,
       onTap: onTap,
       type: BottomNavigationBarType.fixed,
-      items: const [
+      items: [
         BottomNavigationBarItem(
           icon: Icon(Icons.home),
-          label: 'Home',
+          label: AppText.t('bottomNav.home', fallback: 'Home'),
         ),
         BottomNavigationBarItem(
           icon: Icon(Icons.local_pizza),
-          label: 'Menü',
+          label: AppText.t('bottomNav.menu', fallback: 'Menü'),
         ),
         BottomNavigationBarItem(
           icon: Icon(Icons.person),
-          label: 'Profil',
+          label: AppText.t('bottomNav.profile', fallback: 'Profil'),
         ),
       ],
     );

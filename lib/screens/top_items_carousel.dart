@@ -11,6 +11,8 @@ import '../models/menu_item.dart'; // MenuItem model
 import '../widgets/animated_gradient_section.dart';
 import '../widgets/no_internet_widget.dart';
 import '../theme/theme_provider.dart';
+import '../services/restaurant_context.dart';
+import '../services/menu_visibility_service.dart';
 // removed unused imports
 
 /// Маленькая анимированная иконка огонька
@@ -66,7 +68,12 @@ class _AnimatedFireIconState extends State<AnimatedFireIcon>
 /// Секция "Beliebte Gerichte" с градиентным фоном
 class TopItemsSection extends StatefulWidget {
   final void Function(MenuItem item) onTap;
-  const TopItemsSection({super.key, required this.onTap});
+  final ValueChanged<bool>? onAvailabilityChanged;
+  const TopItemsSection({
+    super.key,
+    required this.onTap,
+    this.onAvailabilityChanged,
+  });
 
   @override
   State<TopItemsSection> createState() => _TopItemsSectionState();
@@ -83,6 +90,12 @@ class _TopItemsSectionState extends State<TopItemsSection> {
     _quickCheck();
   }
 
+  @override
+  void didUpdateWidget(covariant TopItemsSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _quickCheck();
+  }
+
   Future<void> _quickCheck() async {
     try {
       dynamic raw;
@@ -90,10 +103,16 @@ class _TopItemsSectionState extends State<TopItemsSection> {
         raw = await _supabase
             .from('order_items')
             .select('menu_v2_item_id, menu_item_id')
-            .limit(1);
+            .eq('restaurant_id', RestaurantContext.current)
+            .order('id', ascending: false)
+            .limit(80);
       } catch (_) {
-        raw =
-            await _supabase.from('order_items').select('menu_item_id').limit(1);
+        raw = await _supabase
+            .from('order_items')
+            .select('menu_item_id')
+            .eq('restaurant_id', RestaurantContext.current)
+            .order('id', ascending: false)
+            .limit(80);
       }
       final list = (raw as List).cast<Map<String, dynamic>>();
       if (!mounted) return;
@@ -102,10 +121,14 @@ class _TopItemsSectionState extends State<TopItemsSection> {
           _checked = true;
           _hasItems = false;
         });
+        widget.onAvailabilityChanged?.call(false);
         return;
       }
-      // Вторичная проверка: исключаем напитки (берём до 1 популярного блюда)
-      final cats = await _supabase.from('menu_v2_category').select('id,name');
+      // Вторичная проверка: есть ли хотя бы одна валидная (видимая и не напиток) позиция
+      final cats = await _supabase
+          .from('menu_v2_category')
+          .select('id,name')
+          .eq('restaurant_id', RestaurantContext.current);
       final drinkCatIds = <int>{};
       for (final c in (cats as List).cast<Map<String, dynamic>>()) {
         final id = (c['id'] as int?) ?? 0;
@@ -135,51 +158,62 @@ class _TopItemsSectionState extends State<TopItemsSection> {
             name.contains('limo');
         if (matchesDrink) drinkCatIds.add(id);
       }
-      // Проверяем есть ли хотя бы одно блюдо не напиток среди order_items
-      final firstRow = list.first;
-      final firstId = (firstRow['menu_v2_item_id'] as int?) ??
-          (firstRow['menu_item_id'] as int?) ??
-          0;
+      final idsToCheck = list
+          .map((row) =>
+              (row['menu_v2_item_id'] as int?) ??
+              (row['menu_item_id'] as int?) ??
+              0)
+          .where((id) => id != 0)
+          .toSet()
+          .toList();
+
       bool show = false;
-      if (firstId != 0) {
-        final item = await _supabase
+      if (idsToCheck.isNotEmpty) {
+        final rows = await _supabase
             .from('menu_v2_item')
-            .select('id, category_id, name, description, sku')
-            .eq('id', firstId)
-            .maybeSingle();
-        if (item != null) {
+            .select('id, category_id, name, description, sku, is_active')
+            .eq('restaurant_id', RestaurantContext.current)
+            .filter('id', 'in', '(${idsToCheck.join(',')})');
+        final items = (rows as List).cast<Map<String, dynamic>>();
+        bool looksDrink(String s) {
+          final n = s.toLowerCase();
+          return n.contains('cola') ||
+              n.contains('bier') ||
+              n.contains('wein') ||
+              n.contains('saft') ||
+              n.contains('wasser') ||
+              n.contains('drink') ||
+              n.contains('getränk') ||
+              n.contains('getraenk') ||
+              n.contains('limo');
+        }
+
+        for (final item in items) {
+          if (!MenuVisibilityService.isVisibleEntity(item)) continue;
           final cid = (item['category_id'] as int?) ?? -1;
-          final name = (item['name'] as String?)?.toLowerCase() ?? '';
-          final desc = (item['description'] as String?)?.toLowerCase() ?? '';
-          final sku = (item['sku'] as String?)?.toLowerCase() ?? '';
-          bool looksDrink(String s) =>
-              s.contains('cola') ||
-              s.contains('bier') ||
-              s.contains('wein') ||
-              s.contains('saft') ||
-              s.contains('wasser') ||
-              s.contains('drink') ||
-              s.contains('getränk') ||
-              s.contains('getraenk') ||
-              s.contains('limo');
-          if (!drinkCatIds.contains(cid) &&
-              !looksDrink(name) &&
-              !looksDrink(desc) &&
-              !looksDrink(sku)) {
-            show = true;
+          if (drinkCatIds.contains(cid)) continue;
+          final name = (item['name'] as String?) ?? '';
+          final desc = (item['description'] as String?) ?? '';
+          final sku = (item['sku'] as String?) ?? '';
+          if (looksDrink(name) || looksDrink(desc) || looksDrink(sku)) {
+            continue;
           }
+          show = true;
+          break;
         }
       }
       setState(() {
         _checked = true;
         _hasItems = show;
       });
+      widget.onAvailabilityChanged?.call(show);
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _checked = true;
         _hasItems = false;
       });
+      widget.onAvailabilityChanged?.call(false);
     }
   }
 
@@ -243,9 +277,13 @@ class _TopItemsCarouselState extends State<TopItemsCarousel> {
       try {
         raw = await supabase
             .from('order_items')
-            .select('menu_v2_item_id, menu_item_id');
+            .select('menu_v2_item_id, menu_item_id')
+            .eq('restaurant_id', RestaurantContext.current);
       } catch (_) {
-        raw = await supabase.from('order_items').select('menu_item_id');
+        raw = await supabase
+            .from('order_items')
+            .select('menu_item_id')
+            .eq('restaurant_id', RestaurantContext.current);
       }
       final all = (raw as List).cast<Map<String, dynamic>>();
       final freq = <int, int>{};
@@ -266,6 +304,7 @@ class _TopItemsCarouselState extends State<TopItemsCarousel> {
       final pp = await supabase
           .from('menu_v2_item_prices')
           .select('item_id, price')
+          .eq('restaurant_id', RestaurantContext.current)
           .filter('item_id', 'in', '(${topIds.join(",")})');
       final priceList = (pp as List).cast<Map<String, dynamic>>();
       final multiMin = <int, double>{};
@@ -276,7 +315,10 @@ class _TopItemsCarouselState extends State<TopItemsCarousel> {
       }
 
       // 3b) Подтянем категории (v2) и определим ID категорий напитков
-      final cats = await supabase.from('menu_v2_category').select('id,name');
+      final cats = await supabase
+          .from('menu_v2_category')
+          .select('id,name')
+          .eq('restaurant_id', RestaurantContext.current);
       final drinkCatIds = <int>{};
       for (final c in (cats as List).cast<Map<String, dynamic>>()) {
         final id = (c['id'] as int?) ?? 0;
@@ -318,7 +360,9 @@ class _TopItemsCarouselState extends State<TopItemsCarousel> {
       }
 
       // 4) читаем menu_v2_item вместе с category_id, на сервере исключим напиточные категории если известны
-      final menuSel = supabase.from('menu_v2_item').select('''
+      final menuSel = supabase
+          .from('menu_v2_item')
+          .select('''
             id,
             category_id,
             name,
@@ -328,7 +372,9 @@ class _TopItemsCarouselState extends State<TopItemsCarousel> {
             has_sizes,
             is_active,
             is_available
-          ''').filter('id', 'in', '(${topIds.join(",")})');
+          ''')
+          .eq('restaurant_id', RestaurantContext.current)
+          .filter('id', 'in', '(${topIds.join(",")})');
       if (drinkCatIds.isNotEmpty) {
         menuSel.not('category_id', 'in', '(${drinkCatIds.join(",")})');
       }
@@ -355,6 +401,7 @@ class _TopItemsCarouselState extends State<TopItemsCarousel> {
       }
 
       final filteredRaw = rawList.where((m) {
+        if (!MenuVisibilityService.isVisibleEntity(m)) return false;
         final cid = (m['category_id'] as int?) ?? -1;
         if (drinkCatIds.contains(cid)) return false;
         final name = (m['name'] as String?) ?? '';
