@@ -8,7 +8,7 @@ if ! command -v brew &> /dev/null; then
 fi
 
 # Install Flutter via homebrew or download directly
-FLUTTER_VERSION="3.29.2"
+FLUTTER_VERSION="3.32.2"
 FLUTTER_DIR="$HOME/flutter"
 
 if [ ! -d "$FLUTTER_DIR" ]; then
